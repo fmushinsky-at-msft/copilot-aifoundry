@@ -1,0 +1,99 @@
+POST http://localhost:7075/api/agent_httptrigger HTTP/1.1
+
+{
+  "message": "what is the northwind plan?",
+  "agentid": "asst_Aqvo3QPJreGvUsqqRZ1BLGPe",
+  "threadid": "thread_yafFVou6cl2sKSRKKtcg0TBj"
+}
+
+
+###
+
+POST https://fapp-agent-f4t.azurewebsites.net/api/agent_httptrigger HTTP/1.1
+
+{
+  "message": "what is my hire date?",
+  "agentid": "Agent-008"
+}
+
+
+###
+
+POST https://apim-tec-dev001.azure-api.net/func-hrbenefit-dev003/agent_httptrigger HTTP/1.1
+Content-Type: application/json
+Host: apim-tec-dev001.azure-api.net
+Ocp-Apim-Subscription-Key: 854a7de7c0354e6bbbdd94d6d6164ed3
+
+{
+  "message": "who is my manager?",
+  "agentid": "PA-Health-Benefit-Agent",
+  "parameters": {
+    "user_id": "PMORGAN",
+    "user_full_name": "Peter Morgan"
+  }
+}
+
+
+
+
+
+###
+POST http://localhost:7071/api/agent_httptrigger HTTP/1.1
+Content-Type: application/json
+
+
+{
+  "message": "How many time can I have my tooth cleaning in my dental plan?",
+  "agentid": "PA-Health-Benefit-Agent",
+  "parameters": {
+    "user_id": "PMORGAN",
+    "username": "Peter Morgan"
+  }
+}
+
+###
+
+POST https://func-hrbenefit-dev003.azurewebsites.net/api/agent_httptrigger?code=xyz HTTP/1.1
+Content-Type: application/json
+
+{
+  "message": "How many time can I have my tooth cleaning in my dental plan?",
+  "agentid": "PA-Health-Benefit-Agent",
+  "parameters": {
+    "user_id": "PMORGAN",
+    "user_full_name": "Peter Morgan"
+  }
+}
+
+###
+
+POST https://logic-hr-ps-test.azurewebsites.net:443/api/ps_pepleprofile_auth_api/triggers/Get_Peoplesoft_Profile/invoke?api-version=2022-05-01&sp=%2Ftriggers%2FGet_Peoplesoft_Profile%2Frun&sv=1.0&sig=a1WHKvReA8gX0flJegvwrF6bfhOO01kHlGbjbS8ZJbU HTTP/1.1
+Content-Type: application/json
+
+{"userid" : "PCHUNG"}
+
+
+
+### 
+POST https://login.microsoftonline.com/c4484a25-d0d8-4ad0-916a-a889b6aa7a02/oauth2/v2.0/token HTTP/1.1
+Content-Type: application/x-www-form-urlencoded
+ 
+grant_type=client_credentials&client_id=5e8e3218-d16f-4ace-bad5-71032d5342eb&scope=api%3A%2F%2F6e7d51bd-04bc-4165-834e-0596a0f541cd%2F.default&client_secret=
+
+
+###
+
+POST https://apim-tec-dev001.azure-api.net/func-hrbenefit-dev003/agent_httptrigger HTTP/1.1
+Content-Type: application/json
+Host: apim-tec-dev001.azure-api.net
+Ocp-Apim-Subscription-Key: 854a7de7c0354e6bbbdd94d6d6164ed3
+Authorization: Bearer <TOKEN>
+
+{
+  "message": "who is my manager?",
+  "agentid": "PA-Health-Benefit-Agent",
+  "parameters": {
+    "user_id": "PMORGAN",
+    "user_full_name": "Peter Morgan"
+  }
+}
