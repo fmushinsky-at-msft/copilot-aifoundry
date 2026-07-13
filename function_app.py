@@ -4,6 +4,13 @@ from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 import os
 import json
+import re
+from urllib.parse import quote
+
+# Matches AI Search / Azure OpenAI file-citation markers such as
+# "【371:1†source】" (full-width brackets + dagger) and the ASCII fallbacks
+# "[371:1+source]" / "[371:1†source]".
+CITATION_TOKEN_RE = re.compile(r"[\[\u3010]\s*\d+:\d+\s*[\u2020\u2021+]\s*source\s*[\]\u3011]")
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -110,8 +117,41 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
                     return value
             return None
 
-        # Build a map of annotations for citation replacement
-        annotations_map = {}
+        def _friendly_title(name):
+            # Turn a blob file name into a nicer display label:
+            # "terminal_ops-manual.odt" -> "Terminal Ops Manual"
+            label = name.rsplit("/", 1)[-1]
+            label = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", label)  # drop extension
+            label = re.sub(r"[_\-]+", " ", label).strip()
+            return label.title() if label else name
+
+        def _build_url(name):
+            if not name:
+                return None
+            # Already an absolute URL? Use as-is.
+            if re.match(r"^https?://", name, re.IGNORECASE):
+                return name
+            if not citation_base_url:
+                return None
+            # URL-encode each path segment so spaces/special chars don't break the link.
+            encoded = "/".join(quote(part) for part in name.split("/") if part)
+            return f"{citation_base_url}/{encoded}"
+
+        # Collect unique sources (preserving first-seen order) and map each raw
+        # citation token to a numbered reference like "[1]".
+        sources = []          # list of (title, url_or_None)
+        source_index = {}     # dedupe key -> reference number
+        annotations_map = {}  # raw citation token -> "[n]"
+
+        def _register_source(title, url):
+            key = url or title
+            if key in source_index:
+                return source_index[key]
+            number = len(sources) + 1
+            source_index[key] = number
+            sources.append((title, url))
+            return number
+
         for item in response.output:
             if item.type == "message" and item.role == "assistant":
                 for content_block in item.content:
@@ -120,30 +160,62 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
                             # Log the raw annotation so we can confirm the shape AI Search returns
                             logging.info(f"Annotation: {ann}")
 
+                            if ann.start_index is None or ann.end_index is None:
+                                continue
                             citation_text = content_block.text[ann.start_index:ann.end_index]
+                            if not citation_text:
+                                continue
 
                             if ann.type == "url_citation":
-                                citation_text = content_block.text[ann.start_index:ann.end_index]
-                                md_link = f"[{ann.title}]({ann.url})"
-                                annotations_map[citation_text] = md_link
-                                title = _attr(ann, "title", "url") or citation_text
-                                annotations_map[citation_text] = f"[{title}]({ann.url})"
-
+                                url = _attr(ann, "url")
+                                title = _attr(ann, "title") or url or citation_text
+                                number = _register_source(title, url)
                             elif ann.type == "file_citation":
                                 # ODF/AI Search grounding returns file citations without a URL.
-                                # Use the file name/title as the display text and, if a base URL
-                                # is configured, build a clickable link to the source document.
-                                filename = _attr(ann, "filename", "title", "file_id") or "Source"
-                                if citation_base_url and filename:
-                                    url = f"{citation_base_url}/{filename}"
-                                    annotations_map[citation_text] = f"[{filename}]({url})"
-                                else:
-                                    annotations_map[citation_text] = f"[{filename}]"
+                                # Build a clickable link from the public blob base URL + file name.
+                                raw_name = _attr(ann, "filename", "title", "file_id") or "Source"
+                                title = _friendly_title(raw_name)
+                                url = _build_url(raw_name)
+                                number = _register_source(title, url)
+                            else:
+                                continue
 
-        # Replace citations in the output text
-        assistant_text = response.output_text
-        for citation, md_link in annotations_map.items():
-            assistant_text = assistant_text.replace(citation, md_link)
+                            annotations_map[citation_text] = number
+
+        # Renumber references in order of first appearance in the visible text so
+        # the numbers read naturally (first citation shown is [1], etc.).
+        assistant_text = response.output_text or ""
+        ordered_tokens = sorted(
+            annotations_map,
+            key=lambda tok: (assistant_text.find(tok) if tok in assistant_text else len(assistant_text)),
+        )
+        old_to_new = {}
+        renumbered_sources = []
+        for token in ordered_tokens:
+            old_number = annotations_map[token]
+            if old_number not in old_to_new:
+                old_to_new[old_number] = len(renumbered_sources) + 1
+                renumbered_sources.append(sources[old_number - 1])
+        sources = renumbered_sources
+
+        # Replace citations in the output text with numbered references.
+        for token in ordered_tokens:
+            new_number = old_to_new[annotations_map[token]]
+            assistant_text = assistant_text.replace(token, f"[{new_number}]")
+
+        # Fallback: replace any leftover raw markers (e.g. "【371:1†source】")
+        # whose annotation spans didn't line up with the visible text.
+        assistant_text = CITATION_TOKEN_RE.sub("", assistant_text)
+
+        # Append a clickable Sources list.
+        if sources:
+            lines = ["", "", "**Sources:**"]
+            for i, (title, url) in enumerate(sources, start=1):
+                if url:
+                    lines.append(f"{i}. [{title}]({url})")
+                else:
+                    lines.append(f"{i}. {title}")
+            assistant_text += "\n".join(lines)
 
         if not assistant_text:
             assistant_text = "No assistant message found."
