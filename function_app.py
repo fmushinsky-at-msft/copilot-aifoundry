@@ -99,6 +99,17 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
 
         response = openai_client.responses.create(**create_kwargs)
 
+        # Optional base URL used to turn a stored file path/name into a clickable link
+        # e.g. "https://<account>.blob.core.windows.net/<container>/"
+        citation_base_url = os.environ.get("CITATION_BASE_URL", "").rstrip("/")
+
+        def _attr(obj, *names):
+            for name in names:
+                value = getattr(obj, name, None)
+                if value:
+                    return value
+            return None
+
         # Build a map of annotations for citation replacement
         annotations_map = {}
         for item in response.output:
@@ -106,10 +117,28 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
                 for content_block in item.content:
                     if hasattr(content_block, "annotations") and content_block.annotations:
                         for ann in content_block.annotations:
+                            # Log the raw annotation so we can confirm the shape AI Search returns
+                            logging.info(f"Annotation: {ann}")
+
+                            citation_text = content_block.text[ann.start_index:ann.end_index]
+
                             if ann.type == "url_citation":
                                 citation_text = content_block.text[ann.start_index:ann.end_index]
                                 md_link = f"[{ann.title}]({ann.url})"
                                 annotations_map[citation_text] = md_link
+                                title = _attr(ann, "title", "url") or citation_text
+                                annotations_map[citation_text] = f"[{title}]({ann.url})"
+
+                            elif ann.type == "file_citation":
+                                # ODF/AI Search grounding returns file citations without a URL.
+                                # Use the file name/title as the display text and, if a base URL
+                                # is configured, build a clickable link to the source document.
+                                filename = _attr(ann, "filename", "title", "file_id") or "Source"
+                                if citation_base_url and filename:
+                                    url = f"{citation_base_url}/{filename}"
+                                    annotations_map[citation_text] = f"[{filename}]({url})"
+                                else:
+                                    annotations_map[citation_text] = f"[{filename}]"
 
         # Replace citations in the output text
         assistant_text = response.output_text
