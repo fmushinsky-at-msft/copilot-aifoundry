@@ -164,6 +164,11 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         for item in response.output:
             if item.type == "message" and item.role == "assistant":
                 for content_block in item.content:
+                    ann_count = len(getattr(content_block, "annotations", None) or [])
+                    logging.info(
+                        f"Content block type={getattr(content_block, 'type', None)} "
+                        f"annotations={ann_count}"
+                    )
                     if hasattr(content_block, "annotations") and content_block.annotations:
                         for ann in content_block.annotations:
                             # Log the raw annotation so we can confirm the shape AI Search returns
