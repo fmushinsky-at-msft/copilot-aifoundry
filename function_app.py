@@ -65,6 +65,15 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=400,
                 mimetype="application/json"
             )
+        except (IndexError, ValueError) as e:
+            return func.HttpResponse(
+                json.dumps({
+                    "error": f"Invalid MESSAGE_TEMPLATE configuration: {str(e)}",
+                    "template": message_template
+                }),
+                status_code=500,
+                mimetype="application/json"
+            )
 
     endpoint = os.environ.get("AIProjectEndpoint")
     
