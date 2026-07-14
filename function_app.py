@@ -16,7 +16,7 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 @app.route(route="agent_httptrigger")
 def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
-    logging.info('Python HTTP trigger function processed a request.')
+    logging.warning('TEMP-DIAG: Python HTTP trigger function processed a request.')
 
     message = req.params.get('message')
     agentid = req.params.get('agentid')
@@ -118,16 +118,16 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         # --- Diagnostic: dump the full response so we can locate citation/source data ---
         try:
             if hasattr(response, "model_dump_json"):
-                logging.info(f"RAW RESPONSE: {response.model_dump_json()}")
+                logging.warning(f"TEMP-DIAG RAW RESPONSE: {response.model_dump_json()}")
             elif hasattr(response, "to_json"):
-                logging.info(f"RAW RESPONSE: {response.to_json()}")
+                logging.warning(f"TEMP-DIAG RAW RESPONSE: {response.to_json()}")
             else:
-                logging.info(f"RAW RESPONSE: {response}")
+                logging.warning(f"TEMP-DIAG RAW RESPONSE: {response}")
         except Exception as dump_err:
             logging.warning(f"Could not serialize response: {dump_err}")
 
         for _i, _item in enumerate(getattr(response, "output", []) or []):
-            logging.info(f"Output[{_i}] type={getattr(_item, 'type', None)} "
+            logging.warning(f"TEMP-DIAG Output[{_i}] type={getattr(_item, 'type', None)} "
                          f"role={getattr(_item, 'role', None)}")
         # --- End diagnostic ---
 
@@ -211,8 +211,8 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             if item.type == "message" and item.role == "assistant":
                 for content_block in item.content:
                     ann_count = len(getattr(content_block, "annotations", None) or [])
-                    logging.info(
-                        f"Content block type={getattr(content_block, 'type', None)} "
+                    logging.warning(
+                        f"TEMP-DIAG Content block type={getattr(content_block, 'type', None)} "
                         f"annotations={ann_count}"
                     )
                     if hasattr(content_block, "annotations") and content_block.annotations:
