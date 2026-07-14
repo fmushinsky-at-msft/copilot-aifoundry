@@ -115,6 +115,22 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
 
         response = openai_client.responses.create(**create_kwargs)
 
+        # --- Diagnostic: dump the full response so we can locate citation/source data ---
+        try:
+            if hasattr(response, "model_dump_json"):
+                logging.info(f"RAW RESPONSE: {response.model_dump_json()}")
+            elif hasattr(response, "to_json"):
+                logging.info(f"RAW RESPONSE: {response.to_json()}")
+            else:
+                logging.info(f"RAW RESPONSE: {response}")
+        except Exception as dump_err:
+            logging.warning(f"Could not serialize response: {dump_err}")
+
+        for _i, _item in enumerate(getattr(response, "output", []) or []):
+            logging.info(f"Output[{_i}] type={getattr(_item, 'type', None)} "
+                         f"role={getattr(_item, 'role', None)}")
+        # --- End diagnostic ---
+
         # Optional base URL used to turn a stored file path/name into a clickable link
         # e.g. "https://<account>.blob.core.windows.net/<container>/"
         citation_base_url = os.environ.get("CITATION_BASE_URL", "").rstrip("/")
