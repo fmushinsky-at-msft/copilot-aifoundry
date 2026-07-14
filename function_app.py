@@ -9,8 +9,8 @@ from urllib.parse import quote
 
 # Matches AI Search / Azure OpenAI file-citation markers such as
 # "【371:1†source】" (full-width brackets + dagger) and the ASCII fallbacks
-# "[371:1+source]" / "[371:1†source]".
-CITATION_TOKEN_RE = re.compile(r"[\[\u3010]\s*\d+:\d+\s*[\u2020\u2021+]\s*source\s*[\]\u3011]")
+# "[371:1+source]" / "[371:1†source]". Groups: 1 = doc index, 2 = chunk index.
+CITATION_TOKEN_RE = re.compile(r"[\[\u3010]\s*(\d+):(\d+)\s*[\u2020\u2021+]\s*source\s*[\]\u3011]")
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -137,7 +137,10 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
 
         def _attr(obj, *names):
             for name in names:
-                value = getattr(obj, name, None)
+                if isinstance(obj, dict):
+                    value = obj.get(name)
+                else:
+                    value = getattr(obj, name, None)
                 if value:
                     return value
             return None
@@ -161,6 +164,33 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             # URL-encode each path segment so spaces/special chars don't break the link.
             encoded = "/".join(quote(part) for part in name.split("/") if part)
             return f"{citation_base_url}/{encoded}"
+
+        def _collect_retrieved_sources():
+            # When the agent doesn't return structured annotations, the source
+            # documents are usually exposed via a file-search / tool-result output
+            # item. Scan every output item defensively (objects OR dicts) for a
+            # list of results carrying a file name / title / url.
+            collected = []
+            seen = set()
+            for item in getattr(response, "output", []) or []:
+                itype = (_attr(item, "type") or "")
+                if not any(k in itype for k in ("file_search", "search", "tool", "retrieval")):
+                    continue
+                results = (_attr(item, "results", "output", "content", "documents") or [])
+                if not isinstance(results, (list, tuple)):
+                    continue
+                for r in results:
+                    name = _attr(r, "filename", "title", "file_id", "id", "name")
+                    if not name:
+                        continue
+                    url = _attr(r, "url") or _build_url(name)
+                    title = name if re.match(r"^https?://", name, re.IGNORECASE) else _friendly_title(name)
+                    key = url or title
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    collected.append((title, url))
+            return collected
 
         # Collect unique sources (preserving first-seen order) and map each raw
         # citation token to a numbered reference like "[1]".
@@ -212,9 +242,46 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
 
                             annotations_map[citation_text] = number
 
+        # Case 2: no (or partial) structured annotations. Resolve any inline
+        # "【N:M†source】" tokens still present in the text using the retrieved
+        # source documents from a file-search / tool-result output item.
+        assistant_text = response.output_text or ""
+        unresolved_tokens = [
+            m.group(0)
+            for m in CITATION_TOKEN_RE.finditer(assistant_text)
+            if m.group(0) not in annotations_map
+        ]
+        if unresolved_tokens:
+            retrieved = _collect_retrieved_sources()
+            logging.info(f"Unresolved citation tokens={len(unresolved_tokens)} "
+                         f"retrieved_sources={len(retrieved)}")
+            if retrieved:
+                unique_tokens = []
+                for tok in unresolved_tokens:
+                    if tok not in unique_tokens:
+                        unique_tokens.append(tok)
+                # Map by document index so multiple chunks of the same document
+                # (e.g. "371:1" and "371:2") resolve to the same source.
+                doc_to_source = {}
+                seq = 0
+                for tok in unique_tokens:
+                    m = CITATION_TOKEN_RE.match(tok)
+                    doc_idx = int(m.group(1)) if m else None
+                    if doc_idx in doc_to_source:
+                        title, url = doc_to_source[doc_idx]
+                    elif doc_idx and 1 <= doc_idx <= len(retrieved):
+                        # Token's doc index is a valid 1-based lookup.
+                        title, url = retrieved[doc_idx - 1]
+                        doc_to_source[doc_idx] = (title, url)
+                    else:
+                        # Out of range: fall back to citation order.
+                        title, url = retrieved[seq % len(retrieved)]
+                        doc_to_source[doc_idx] = (title, url)
+                        seq += 1
+                    annotations_map[tok] = _register_source(title, url)
+
         # Renumber references in order of first appearance in the visible text so
         # the numbers read naturally (first citation shown is [1], etc.).
-        assistant_text = response.output_text or ""
         ordered_tokens = sorted(
             annotations_map,
             key=lambda tok: (assistant_text.find(tok) if tok in assistant_text else len(assistant_text)),
