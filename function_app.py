@@ -494,7 +494,9 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             input="",  # Empty since we already added the message to the conversation
             extra_body={
                 "agent": {"type": "agent_reference", "name": agent.name},
-            }
+            },
+            # Reasoning effort is configurable via env (low|medium|high); default medium.
+            reasoning={"effort": os.environ.get("REASONING_EFFORT", "medium").lower()},
         )
 
         # --- Diagnostic: dump the full response so we can locate citation/source data ---
