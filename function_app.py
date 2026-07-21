@@ -52,12 +52,12 @@ def summarize_conversation(openai_client, conversation_id, model):
         summary_resp = openai_client.responses.create(
             model=model,
             input=[
-                {"role": "system", "content": (
+                {"type": "message", "role": "system", "content": (
                     "Summarize the following assistant/user conversation in 3-5 concise "
                     "bullet points. Capture key facts, decisions, and unresolved questions "
                     "so the assistant can continue seamlessly. Do not add new information."
                 )},
-                {"role": "user", "content": joined},
+                {"type": "message", "role": "user", "content": joined},
             ],
         )
         summary = (getattr(summary_resp, "output_text", "") or "").strip()
@@ -394,7 +394,7 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         instructions = instructions or "You are a helpful assistant."
     
     endpoint = os.environ.get("AIProjectEndpoint")
-    model_deployment = os.environ.get("ModelDeploymentName", "gpt-4o-mini")
+    model_deployment = os.environ.get("ModelDeploymentName", "gpt-5.5")
     agent_id = os.environ.get("AGENT_ID")  # Optional: use existing agent instead of creating ephemeral ones
     
     # If no AGENT_ID in env but agent_name is provided in request with PERSIST_AGENT=true,
@@ -495,8 +495,6 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             extra_body={
                 "agent": {"type": "agent_reference", "name": agent.name},
             },
-            # Reasoning effort is configurable via env (low|medium|high); default medium.
-            reasoning={"effort": os.environ.get("REASONING_EFFORT", "medium").lower()},
         )
 
         # --- Diagnostic: dump the full response so we can locate citation/source data ---
