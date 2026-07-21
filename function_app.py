@@ -17,6 +17,56 @@ from azure.ai.projects import AIProjectClient
 CITATION_TOKEN_RE = re.compile(r"[\[\u3010]\s*(\d+):(\d+)\s*[\u2020\u2021+]\s*source\s*[\]\u3011]")
 
 
+def summarize_conversation(openai_client, conversation_id, model):
+    """Best-effort summary of a conversation's prior turns, used to carry a
+    little context forward when we roll over to a fresh conversation. Returns a
+    short plain-text summary, or None on any failure."""
+    try:
+        items = openai_client.conversations.items.list(conversation_id=conversation_id)
+
+        # Collect only user/assistant message text, skipping bulky tool outputs.
+        transcript = []
+        for it in items:
+            role = getattr(it, "role", None) or (it.get("role") if isinstance(it, dict) else None)
+            if role not in ("user", "assistant"):
+                continue
+            content = getattr(it, "content", None) or (it.get("content") if isinstance(it, dict) else None)
+            text = ""
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, (list, tuple)):
+                for block in content:
+                    btext = getattr(block, "text", None) or (block.get("text") if isinstance(block, dict) else None)
+                    if btext:
+                        text += btext
+            if text.strip():
+                transcript.append(f"{role}: {text.strip()}")
+
+        if not transcript:
+            return None
+
+        # Cap the transcript size we send to the summarizer to avoid re-hitting
+        # the context window while summarizing.
+        joined = "\n".join(transcript)[-6000:]
+
+        summary_resp = openai_client.responses.create(
+            model=model,
+            input=[
+                {"role": "system", "content": (
+                    "Summarize the following assistant/user conversation in 3-5 concise "
+                    "bullet points. Capture key facts, decisions, and unresolved questions "
+                    "so the assistant can continue seamlessly. Do not add new information."
+                )},
+                {"role": "user", "content": joined},
+            ],
+        )
+        summary = (getattr(summary_resp, "output_text", "") or "").strip()
+        return summary or None
+    except Exception as sum_err:
+        logging.warning(f"Conversation summarization failed: {sum_err}")
+        return None
+
+
 def render_message_with_citations(response):
     """Convert an agent response into a message with human-readable, clickable
     citations and a Sources list. Isolated so a failure here can degrade to the
@@ -372,17 +422,64 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         openai_client = project_client.get_openai_client()
 
         if threadid:
-            # Continue existing conversation
-            conversation_id = threadid
-            # get the conversation to ensure it exists
-            conversation = openai_client.conversations.retrieve(conversation_id)
+            # Continue existing conversation, but cap history so the accumulated
+            # messages + large tool outputs never exceed the model context window.
+            # MAX_CONVERSATION_TURNS: number of user turns to keep before rolling
+            # over to a fresh conversation (default 8; set 0 to disable the cap).
+            try:
+                max_turns = int(os.environ.get("MAX_CONVERSATION_TURNS", "8"))
+            except ValueError:
+                max_turns = 8
 
-            # Add the new user message to the existing conversation
-            openai_client.conversations.items.create(
-                conversation_id=conversation_id,
-                items=[{"type": "message", "role": "user", "content": message}]
-            )
-            
+            rollover = False
+            if max_turns > 0:
+                try:
+                    existing_items = openai_client.conversations.items.list(
+                        conversation_id=threadid
+                    )
+                    user_turns = sum(
+                        1 for it in existing_items
+                        if getattr(it, "role", None) == "user"
+                        or (isinstance(it, dict) and it.get("role") == "user")
+                    )
+                    logging.info(f"Conversation {threadid} user turns={user_turns} (cap={max_turns})")
+                    if user_turns >= max_turns:
+                        rollover = True
+                except Exception as list_err:
+                    # If we can't inspect history, roll over to be safe rather
+                    # than risk another context_length_exceeded failure.
+                    logging.warning(f"Could not list conversation items, rolling over: {list_err}")
+                    rollover = True
+
+            if rollover:
+                logging.info(f"Conversation {threadid} exceeded turn cap; starting a fresh conversation.")
+                # Optional: carry a short summary of the prior conversation into
+                # the fresh one so follow-up questions retain some context.
+                # Enabled by default; disable with ENABLE_SUMMARY_CARRYOVER=false.
+                seed_items = [{"type": "message", "role": "system", "content": instructions}]
+                if os.environ.get("ENABLE_SUMMARY_CARRYOVER", "true").lower() not in ("0", "false", "no"):
+                    summary = summarize_conversation(openai_client, threadid, model_deployment)
+                    if summary:
+                        logging.info("Carrying conversation summary into new conversation.")
+                        seed_items.append({
+                            "type": "message",
+                            "role": "system",
+                            "content": f"Summary of the earlier conversation for context:\n{summary}",
+                        })
+                seed_items.append({"type": "message", "role": "user", "content": message})
+                conversation = openai_client.conversations.create(items=seed_items)
+                conversation_id = conversation.id
+            else:
+                conversation_id = threadid
+                # get the conversation to ensure it exists
+                conversation = openai_client.conversations.retrieve(conversation_id)
+
+                # Add the new user message to the existing conversation
+                openai_client.conversations.items.create(
+                    conversation_id=conversation_id,
+                    items=[{"type": "message", "role": "user", "content": message}]
+                )
+
         else:
             # Create a conversation for context persistence
             conversation = openai_client.conversations.create(
