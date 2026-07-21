@@ -340,10 +340,34 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
     parameters = None
     
     if not message:
+        req_body = None
         try:
             req_body = req.get_json()
         except ValueError:
-            req_body = None
+            # Malformed JSON body — most commonly caused by an unescaped double
+            # quote in the user's question breaking the caller's JSON payload.
+            raw = ""
+            try:
+                raw = req.get_body().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            logging.warning(
+                "Request JSON parse failed (likely unescaped characters in the "
+                f"body). Raw body (truncated): {raw[:1000]}"
+            )
+            # Lenient re-parse attempt: try to recover common escaping problems
+            # (bare newlines/tabs and unescaped inner double quotes).
+            if raw:
+                try:
+                    req_body = json.loads(raw)
+                except Exception:
+                    try:
+                        repaired = raw.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+                        req_body = json.loads(repaired)
+                        logging.info("Recovered request body after lenient re-parse.")
+                    except Exception as reparse_err:
+                        logging.warning(f"Lenient re-parse also failed: {reparse_err}")
+                        req_body = None
 
         if req_body:
             message = req_body.get('message')
@@ -353,6 +377,7 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             parameters = req_body.get('parameters')  # JSON object with name-value pairs
 
     if not message:
+        logging.warning("Returning 400: no usable 'message' in query params or request body.")
         return func.HttpResponse(
             json.dumps({
                 "error": "Missing required parameter 'message'",
