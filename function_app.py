@@ -7,6 +7,8 @@ import os
 import json
 import asyncio
 import re
+import urllib.request
+import urllib.error
 from urllib.parse import quote
 from pathlib import Path
 from azure.ai.projects import AIProjectClient
@@ -15,6 +17,26 @@ from azure.ai.projects import AIProjectClient
 # "【371:1†source】" (full-width brackets + dagger) and the ASCII fallbacks
 # "[371:1+source]" / "[371:1†source]". Groups: 1 = doc index, 2 = chunk index.
 CITATION_TOKEN_RE = re.compile(r"[\[\u3010]\s*(\d+):(\d+)\s*[\u2020\u2021+]\s*source\s*[\]\u3011]")
+
+# Phrases that indicate the agent could not answer from its knowledge base.
+# Used to set a "canAnswer" flag so the Copilot Studio topic can offer to
+# email the question to HR. Configurable via NO_ANSWER_MARKERS (";"-separated).
+DEFAULT_NO_ANSWER_MARKERS = [
+    "cannot answer this question based on the Benefit Open Enrollment information",
+    "i cannot answer this question",
+    "apologies, but i cannot answer",
+    "NO_ANSWER",
+]
+
+
+def detect_no_answer(text):
+    """Return True if the assistant text signals it could not answer."""
+    if not text:
+        return True
+    raw = os.environ.get("NO_ANSWER_MARKERS", "")
+    markers = [m.strip() for m in raw.split(";") if m.strip()] or DEFAULT_NO_ANSWER_MARKERS
+    lowered = text.lower()
+    return any(m.lower() in lowered for m in markers)
 
 
 def summarize_conversation(openai_client, conversation_id, model):
@@ -548,9 +570,23 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             logging.error(traceback.format_exc())
             assistant_text = (getattr(response, "output_text", "") or "").strip() or "No assistant message found."
 
+        # Flag whether the agent could answer, so the Copilot Studio topic can
+        # offer to email the question to HR when it could not. Detect first (the
+        # NO_ANSWER sentinel may be present), then strip the sentinel so it is
+        # never shown to the user.
+        can_answer = not detect_no_answer(assistant_text)
+        logging.info(f"canAnswer={can_answer}")
+
+        # Remove the NO_ANSWER sentinel (and tidy leftover whitespace) from the
+        # user-visible message.
+        assistant_text = re.sub(r"\s*NO_ANSWER\s*", " ", assistant_text).strip()
+        if not assistant_text:
+            assistant_text = "No assistant message found."
+
         result = {
         "message": assistant_text,
-        "threadId": response.conversation.id
+        "threadId": response.conversation.id,
+        "canAnswer": can_answer
         }
 
 
@@ -568,4 +604,126 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             json.dumps({"error": str(e)}),
             status_code=500,
             mimetype="application/json"
+        )
+
+
+@app.route(route="send_hr_email")
+def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
+    """Send a user's unanswered question to HR via Microsoft Graph, using the
+    Function's managed identity.
+
+    Request (query string or JSON body):
+        - question (required): the user's question to forward
+        - user_full_name (optional): who is asking
+        - user_id (optional): employee id
+        - conversation_id (optional): for traceability
+
+    Environment variables:
+        - HR_TO_ADDRESS (required): destination HR mailbox
+        - HR_FROM_ADDRESS (required): the shared mailbox/service account to send as
+    """
+    logging.info("send_hr_email trigger invoked.")
+
+    # --- Parse inputs (query params first, then JSON body) ---
+    question = req.params.get("question")
+    user_full_name = req.params.get("user_full_name")
+    user_id = req.params.get("user_id")
+    conversation_id = req.params.get("conversation_id")
+
+    if not question:
+        try:
+            body = req.get_json()
+        except ValueError:
+            body = None
+        if body:
+            question = body.get("question")
+            user_full_name = body.get("user_full_name")
+            user_id = body.get("user_id")
+            conversation_id = body.get("conversation_id")
+
+    if not question:
+        return func.HttpResponse(
+            json.dumps({"error": "Missing required parameter 'question'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    to_addr = os.environ.get("HR_TO_ADDRESS")
+    from_addr = os.environ.get("HR_FROM_ADDRESS")
+    if not to_addr or not from_addr:
+        logging.error("HR_TO_ADDRESS and HR_FROM_ADDRESS must be set.")
+        return func.HttpResponse(
+            json.dumps({"error": "Server configuration error: HR mailbox not configured."}),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+    try:
+        # --- Acquire a Microsoft Graph token via the managed identity ---
+        credential = DefaultAzureCredential()
+        token = credential.get_token("https://graph.microsoft.com/.default").token
+
+        # --- Build the message ---
+        who = user_full_name or "An employee"
+        who_line = f"{who}" + (f" (ID: {user_id})" if user_id else "")
+        body_lines = [
+            "A user question could not be answered by the Benefits assistant and was forwarded for help.",
+            "",
+            f"From: {who_line}",
+        ]
+        if conversation_id:
+            body_lines.append(f"Conversation: {conversation_id}")
+        body_lines += ["", "Question:", question]
+        email_text = "\n".join(body_lines)
+
+        graph_payload = {
+            "message": {
+                "subject": "Benefits question forwarded from the assistant",
+                "body": {"contentType": "Text", "content": email_text},
+                "toRecipients": [{"emailAddress": {"address": to_addr}}],
+            },
+            "saveToSentItems": True,
+        }
+
+        # --- Send via Graph sendMail (as the shared mailbox) ---
+        url = f"https://graph.microsoft.com/v1.0/users/{quote(from_addr)}/sendMail"
+        data = json.dumps(graph_payload).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=data,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=30) as resp:
+            status = resp.status  # 202 Accepted on success
+
+        logging.info(f"HR email sent (status {status}) to {to_addr} as {from_addr}.")
+        return func.HttpResponse(
+            json.dumps({"sent": True, "message": "Your question has been emailed to HR."}),
+            status_code=200,
+            mimetype="application/json",
+        )
+    except urllib.error.HTTPError as http_err:
+        detail = ""
+        try:
+            detail = http_err.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        logging.error(f"Graph sendMail failed: {http_err.code} {detail}")
+        return func.HttpResponse(
+            json.dumps({"sent": False, "error": f"Graph error {http_err.code}", "detail": detail}),
+            status_code=502,
+            mimetype="application/json",
+        )
+    except Exception as e:
+        logging.error(f"send_hr_email error: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return func.HttpResponse(
+            json.dumps({"sent": False, "error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
         )
