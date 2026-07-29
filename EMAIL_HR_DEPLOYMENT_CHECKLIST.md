@@ -13,6 +13,9 @@ Feature spans five systems:
 
 > Legend: ☐ = to do. Work top to bottom; later steps assume earlier ones are done.
 
+> **Sections 7, 8 and 9 have a detailed click-by-click companion guide:**
+> [COPILOT_STUDIO_SETUP_GUIDE.md](./COPILOT_STUDIO_SETUP_GUIDE.md)
+
 ---
 
 ## 0. Prerequisites
@@ -174,6 +177,8 @@ Location: **https://ai.azure.com → project `proj-default` → Agents → PA-He
 
 ## 7. Copilot Studio / Power Automate — request body escaping
 
+> Detailed steps: [COPILOT_STUDIO_SETUP_GUIDE.md → Part 2](./COPILOT_STUDIO_SETUP_GUIDE.md#part-2--fix-json-escaping-with-addproperty-section-7)
+
 > Prevents user text containing `"` from breaking the JSON sent to the Function.
 
 For **both** the agent action and the `send_hr_email` action, build the HTTP body with the
@@ -192,6 +197,8 @@ For **both** the agent action and the `send_hr_email` action, build the HTTP bod
 ---
 
 ## 8. Copilot Studio — topic logic (offer + send)
+
+> Detailed steps: [COPILOT_STUDIO_SETUP_GUIDE.md → Part 3](./COPILOT_STUDIO_SETUP_GUIDE.md#part-3--topic-logic-offer--send-section-8)
 
 Location: **Copilot Studio → your agent → Topics → the topic that calls the agent action**.
 
@@ -219,6 +226,8 @@ Location: **Copilot Studio → your agent → Topics → the topic that calls th
 ---
 
 ## 9. Connect the `send_hr_email` action
+
+> Detailed steps: [COPILOT_STUDIO_SETUP_GUIDE.md → Part 1](./COPILOT_STUDIO_SETUP_GUIDE.md#part-1--create-the-send_hr_email-flow-section-9)
 
 - ☐ Ensure Copilot Studio has an action/connector (or Power Automate flow) that POSTs to
   `https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email` including the **function key**
