@@ -181,14 +181,14 @@ Location: **https://ai.azure.com → project `proj-default` → Agents → PA-He
 
 > Prevents user text containing `"` from breaking the JSON sent to the Function.
 
-For **both** the agent action and the `send_hr_email` action, build the HTTP body with the
+For the **agent action** (`agent_httptrigger`), build the HTTP body with the
 `addProperty` pattern instead of hand-typed JSON.
 
 - ☐ Open the flow/action in **Power Automate** (make.powerautomate.com, same environment).
 - ☐ Add a **Compose** action before the **HTTP** action.
 - ☐ In Compose **Inputs**, use an expression like (adjust field sources):
   ```
-  addProperty(addProperty(json('{}'), 'question', triggerBody()?['text']), 'conversation_id', variables('threadId'))
+  addProperty(addProperty(json('{}'), 'message', triggerBody()?['text']), 'threadid', triggerBody()?['text_1'])
   ```
 - ☐ In the **HTTP** action **Body**, reference `@{outputs('Compose')}`.
 - ☐ Keep header **Content-Type: application/json**.
@@ -216,7 +216,6 @@ Location: **Copilot Studio → your agent → Topics → the topic that calls th
 	  - `user_full_name` → user profile / `text_3`
 	  - `user_id` → `text_2`
 	  - `conversation_id` → `threadId` from the agent action
-	  - (Build this body with the `addProperty` escaping from Section 7.)
 	- ☐ After it returns → **Send a message** with the confirmation (`message`:
 	  "Your question has been emailed to HR.").
 	- ☐ On **No** → send a courteous closing message.
@@ -275,4 +274,4 @@ curl -X POST "https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email?code=<F
 | Application Access Policy | Exchange Online PowerShell | Restrict MI to the shared mailbox |
 | `NO_ANSWER` instruction | Foundry agent instructions | Deterministic no-answer signal |
 | `canAnswer` handling | Copilot Studio topic | Drives the email offer |
-| `addProperty` body | Power Automate HTTP actions | JSON-escapes user text |
+| `addProperty` body | Power Automate \u2014 agent action HTTP body | JSON-escapes user text |

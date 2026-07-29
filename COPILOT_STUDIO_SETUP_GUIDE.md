@@ -84,40 +84,40 @@ Creating it from inside Copilot Studio automatically wires it as an available ac
 
 > Names are case-sensitive when you reference them later. Keep them exactly as above.
 
-### 1.4 Add the Compose action that builds the JSON body
-This is the escaping fix (Section 7) applied to this flow.
+### 1.4 Note the trigger input tokens
+You will reference these inputs in the HTTP body in the next step.
 
-1. Below the trigger, click **+** → **Add an action**.
-2. Search **Compose** → select **Compose** (under **Data Operation**).
-3. Rename it for clarity: click the node title → type **Compose request body**.
-4. Click inside the **Inputs** field.
-5. Open the **expression editor**:
-   - Newer designer: click the box, then the **fx** icon in the pop-up panel.
-   - Classic designer: choose the **Expression** tab in the right-hand flyout.
-6. Paste this **single-line** expression:
+1. Click the trigger node **When an agent calls the flow**.
+2. Open the **Dynamic content** panel and hover each input to see its underlying token.
+3. Power Automate names them `text`, `text_1`, `text_2`, `text_3` in the order you created
+   them, which maps to:
 
-```
-addProperty(addProperty(addProperty(addProperty(json('{}'), 'question', triggerBody()?['text']), 'user_full_name', triggerBody()?['text_1']), 'user_id', triggerBody()?['text_2']), 'conversation_id', triggerBody()?['text_3'])
-```
+| Input you created | Token |
+|---|---|
+| `question` | `triggerBody()?['text']` |
+| `user_full_name` | `triggerBody()?['text_1']` |
+| `user_id` | `triggerBody()?['text_2']` |
+| `conversation_id` | `triggerBody()?['text_3']` |
 
-7. Click **OK** / **Add** to commit.
-
-> **Important — verify the token names.** Power Automate names trigger inputs
-> `text`, `text_1`, `text_2`, `text_3` in the order you created them. To be certain:
-> click in the Inputs box, open the **Dynamic content** tab, and hover each input to see
-> its underlying token. If your order differs, adjust the expression accordingly so that:
-> `question` ← the question input, `user_full_name` ← the name input, etc.
+> If your creation order differed, note the actual tokens and use those in the next step.
 
 ### 1.5 Add the HTTP action
-1. Below Compose, click **+** → **Add an action**.
+1. Below the trigger, click **+** → **Add an action**.
 2. Search **HTTP** → select **HTTP** (the plain "HTTP" action, premium connector).
 3. Configure:
    - **Method:** `POST`
    - **URI:** `https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email?code=<FUNCTION_KEY>`
    - **Headers:** add one row → Key `Content-Type`, Value `application/json`
-   - **Body:** click the field → **Dynamic content** → under **Compose request body**
-	 select **Outputs**. The field should show `@{outputs('Compose_request_body')}`
-	 and contain nothing else.
+   - **Body:** enter the JSON below, inserting each value from **Dynamic content**:
+
+```json
+{
+  "question": "@{triggerBody()?['text']}",
+  "user_full_name": "@{triggerBody()?['text_1']}",
+  "user_id": "@{triggerBody()?['text_2']}",
+  "conversation_id": "@{triggerBody()?['text_3']}"
+}
+```
 
 > Alternative to putting the key in the URL: leave the URI without `?code=` and add a second
 > header — Key `x-functions-key`, Value `<FUNCTION_KEY>`. Slightly cleaner (key not in URL logs).
@@ -374,7 +374,7 @@ Copilot Studio automatically creates a branch per option when you use multiple c
 | Email flow fails with 401/403 | Function key missing or wrong | Re-copy the key; verify `?code=` or `x-functions-key` header |
 | Email flow returns 502 `Authorization_RequestDenied` | Graph `Mail.Send` not granted | Complete main checklist Section 3 |
 | Email flow returns 502 `ErrorAccessDenied` | Exchange policy excludes the mailbox | Complete/await main checklist Section 4 |
-| `400 Missing required parameter 'question'` | Input name mismatch | Flow input must produce JSON key `question` (check the `addProperty` expression) |
+| `400 Missing required parameter 'question'` | Input name mismatch | Flow HTTP body must produce the JSON key `question` |
 | Function logs `Request JSON parse failed` | Body still hand-templated | Re-do Part 2 (Compose + `addProperty`) |
 | Quote in question still breaks the call | HTTP Body not pointing at Compose | Confirm Body contains only `@{outputs('Compose_agent_body')}` |
 | Changes not visible in Teams | Agent not published | Click **Publish** in Copilot Studio |
@@ -397,11 +397,6 @@ traces
 ---
 
 ## Appendix — expression quick reference
-
-**Email flow body (Part 1.4):**
-```
-addProperty(addProperty(addProperty(addProperty(json('{}'), 'question', triggerBody()?['text']), 'user_full_name', triggerBody()?['text_1']), 'user_id', triggerBody()?['text_2']), 'conversation_id', triggerBody()?['text_3'])
-```
 
 **Agent flow body (Part 2.3):**
 ```
