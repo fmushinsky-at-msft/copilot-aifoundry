@@ -1,6 +1,6 @@
 # Copilot Studio & Power Automate — Detailed Implementation Guide
 
-Companion to **EMAIL_HR_DEPLOYMENT_CHECKLIST.md**, expanding Sections **7, 8, and 9** into
+Companion to **EMAIL_HR_DEPLOYMENT_CHECKLIST.md**, expanding Sections **8 and 9** into
 click-by-click instructions.
 
 **Goal:** When the Benefit agent cannot answer a question, Teams offers to email the question
@@ -16,10 +16,9 @@ to HR; on *Yes*, the Azure Function sends the email.
 ## Table of contents
 - [Part 0 — Orientation: where things live](#part-0--orientation-where-things-live)
 - [Part 1 — Create the `send_hr_email` flow (Section 9)](#part-1--create-the-send_hr_email-flow-section-9)
-- [Part 2 — Fix JSON escaping with `addProperty` (Section 7)](#part-2--fix-json-escaping-with-addproperty-section-7)
-- [Part 3 — Topic logic: offer & send (Section 8)](#part-3--topic-logic-offer--send-section-8)
-- [Part 4 — Publish and test](#part-4--publish-and-test)
-- [Part 5 — Troubleshooting](#part-5--troubleshooting)
+- [Part 2 — Topic logic: offer & send (Section 8)](#part-2--topic-logic-offer--send-section-8)
+- [Part 3 — Publish and test](#part-3--publish-and-test)
+- [Part 4 — Troubleshooting](#part-4--troubleshooting)
 
 ---
 
@@ -147,92 +146,9 @@ Lets the topic show the function's confirmation text.
 
 ---
 
-## Part 2 — Fix JSON escaping with `addProperty` (Section 7)
+## Part 2 — Topic logic: offer & send (Section 8)
 
-Part 1 already applied this to the new flow. Now apply the same fix to the **existing flow
-that calls the agent** (`agent_httptrigger`) — this is what fixes the double-quote bug.
-
-### 2.1 Open the existing agent flow
-1. Go to **https://make.powerautomate.com** (correct environment).
-2. Left navigation → **My flows**.
-   - If the flow lives in a solution: left navigation → **Solutions** → open your agent's
-	 solution → **Cloud flows**.
-3. Find the flow that calls `agent_httptrigger` (name likely references the agent or the
-   Copilot Studio action).
-4. Click it → click **Edit** (pencil icon, top toolbar).
-
-### 2.2 Inspect the current HTTP action
-1. Scroll to the **HTTP** action whose URI contains `agent_httptrigger`.
-2. Click it to expand.
-3. Look at **Body**. Today it likely reads:
-```json
-{
-  "message": "@{triggerBody()?['text']}",
-  "agent_name": "PA-Health-Benefit-Agent",
-  "parameters": {
-	"user_id": "@{triggerBody()?['text_2']}",
-	"user_full_name": "@{triggerBody()?['text_3']}"
-  },
-  "threadid": "@{triggerBody()?['text_1']}"
-}
-```
-4. **Copy this text into a scratch file** before changing it — you need the exact token names
-   (`text`, `text_1`, `text_2`, `text_3`).
-
-### 2.3 Add the Compose action
-1. Hover over the connector arrow just **above** the HTTP action.
-2. Click the **+** circle → **Add an action**.
-3. Search **Compose** → select **Compose**.
-4. Rename it to **Compose agent body**.
-5. Click **Inputs** → open the **fx / Expression** editor.
-6. Paste this **single-line** expression (it reproduces the body above, including the nested
-   `parameters` object):
-
-```
-addProperty(addProperty(addProperty(addProperty(json('{}'), 'message', triggerBody()?['text']), 'agent_name', 'PA-Health-Benefit-Agent'), 'parameters', addProperty(addProperty(json('{}'), 'user_id', triggerBody()?['text_2']), 'user_full_name', triggerBody()?['text_3'])), 'threadid', triggerBody()?['text_1'])
-```
-
-7. Click **OK**.
-
-**How to read it (inside-out):**
-| Step | Adds |
-|---|---|
-| `json('{}')` | empty object |
-| + `message` | the user's question (auto-escaped) |
-| + `agent_name` | constant `PA-Health-Benefit-Agent` |
-| + `parameters` | nested object with `user_id`, `user_full_name` |
-| + `threadid` | conversation id |
-
-### 2.4 Point the HTTP Body at Compose
-1. Click the **HTTP** action.
-2. **Delete everything** in the **Body** field.
-3. With the cursor in **Body**, open **Dynamic content** → under **Compose agent body**
-   select **Outputs**.
-4. Confirm Body now contains only `@{outputs('Compose_agent_body')}`.
-5. Confirm **Headers** still has `Content-Type: application/json`.
-
-### 2.5 Save and verify escaping
-1. Click **Save**.
-2. Click **Test** (top-right) → **Manually** → **Test**.
-3. Trigger it with a question containing a quote, e.g.
-   `Can I enroll in the "Choice Plus" plan?`
-4. Open the run → click **Compose agent body** → inspect **Outputs**. You should see:
-```json
-{
-  "message": "Can I enroll in the \"Choice Plus\" plan?",
-  "agent_name": "PA-Health-Benefit-Agent",
-  "parameters": { "user_id": "SCHOY", "user_full_name": "Steven Choy" },
-  "threadid": ""
-}
-```
-The `\"` confirms correct escaping.
-5. Click the **HTTP** step → confirm **Status 200**.
-
----
-
-## Part 3 — Topic logic: offer & send (Section 8)
-
-### 3.1 Open the topic
+### 2.1 Open the topic
 1. Go to **Copilot Studio** → select your agent.
 2. Left navigation → **Topics**.
 3. Open the topic that calls the agent action. If your agent uses a single main topic, it may
@@ -240,7 +156,7 @@ The `\"` confirms correct escaping.
    *Ask Benefits*.
 4. The authoring canvas opens showing nodes top to bottom.
 
-### 3.2 Confirm the agent action returns `canAnswer`
+### 2.2 Confirm the agent action returns `canAnswer`
 1. Locate the **Call an action** node that invokes the agent flow (`agent_httptrigger`).
 2. Click it and look at the **Outputs** section — you should see `message`, `threadId`,
    and `canAnswer`.
@@ -256,14 +172,14 @@ The `\"` confirms correct escaping.
 > `{ "message": "...", "threadId": "conv_...", "canAnswer": false }`
 > The flow must surface `canAnswer` as an output for the topic to branch on it.
 
-### 3.3 Save the question into a variable (if not already)
+### 2.3 Save the question into a variable (if not already)
 You need the original user question later for the email.
 1. Find where the user's question is captured (often `Activity.Text` or a topic variable).
 2. If it is not already stored, add a **Set a variable value** node just before the action:
    - **Set variable:** create `Topic.UserQuestion`
    - **To value:** select **System.Activity.Text** (or the existing question variable).
 
-### 3.4 Add the condition on `canAnswer`
+### 2.4 Add the condition on `canAnswer`
 1. Click the **+** below the **Call an action** node.
 2. Select **Add a condition**.
 3. In the condition node:
@@ -276,7 +192,7 @@ You need the original user question later for the email.
 
 > Result: **true** branch = the agent could NOT answer. **Else** branch = normal answer.
 
-### 3.5 Build the "could not answer" branch
+### 2.5 Build the "could not answer" branch
 Work inside the **true** branch (`canAnswer = false`).
 
 **a) Show the agent's apology message**
@@ -319,27 +235,27 @@ Copilot Studio automatically creates a branch per option when you use multiple c
 1. Click **+** in the **No** branch → **Send a message**.
 2. Type: `No problem. Let me know if there's anything else I can help with.`
 
-### 3.6 Build the normal branch
+### 2.6 Build the normal branch
 1. In the **All other conditions** (else) branch — meaning `canAnswer = true`:
 2. Click **+** → **Send a message**.
 3. Insert the action's **message** output so the user sees the normal answer.
 
-### 3.7 Save
+### 2.7 Save
 1. Click **Save** (top-right of the topic canvas).
 2. Resolve any red error markers on nodes (usually an unset variable or empty message).
 
 ---
 
-## Part 4 — Publish and test
+## Part 3 — Publish and test
 
-### 4.1 Publish the agent
+### 3.1 Publish the agent
 1. In Copilot Studio, click **Publish** (top-right).
 2. Confirm **Publish** in the dialog.
 3. Wait for "Publish succeeded".
 
 > Changes are **not** visible in Teams until you publish.
 
-### 4.2 Test in the Copilot Studio test pane first
+### 3.2 Test in the Copilot Studio test pane first
 1. Open the **Test your agent** panel (right side; toggle at top-right if hidden).
 2. Ask a question the agent **can** answer (e.g. *What medical plans are available?*).
    - Expect: a normal answer, no email prompt.
@@ -350,20 +266,19 @@ Copilot Studio automatically creates a branch per option when you use multiple c
    - Expect: the confirmation message.
 5. Check the HR mailbox for the forwarded question.
 
-### 4.3 Test in Teams
+### 3.3 Test in Teams
 1. Open the agent in **Teams**.
 2. Repeat the "cannot answer" question.
 3. Click **Yes** and confirm the email arrives.
-4. Also ask a question containing a double quote to confirm the Part 2 escaping fix.
 
-### 4.4 Verify on the Azure side
+### 3.4 Verify on the Azure side
 - Function App → **Log stream** should show:
   - `canAnswer=False` for the unanswerable question.
   - `send_hr_email trigger invoked.` then `HR email sent (status 202) ...`
 
 ---
 
-## Part 5 — Troubleshooting
+## Part 4 — Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -375,8 +290,6 @@ Copilot Studio automatically creates a branch per option when you use multiple c
 | Email flow returns 502 `Authorization_RequestDenied` | Graph `Mail.Send` not granted | Complete main checklist Section 3 |
 | Email flow returns 502 `ErrorAccessDenied` | Exchange policy excludes the mailbox | Complete/await main checklist Section 4 |
 | `400 Missing required parameter 'question'` | Input name mismatch | Flow HTTP body must produce the JSON key `question` |
-| Function logs `Request JSON parse failed` | Body still hand-templated | Re-do Part 2 (Compose + `addProperty`) |
-| Quote in question still breaks the call | HTTP Body not pointing at Compose | Confirm Body contains only `@{outputs('Compose_agent_body')}` |
 | Changes not visible in Teams | Agent not published | Click **Publish** in Copilot Studio |
 
 ### Where to look at run details
@@ -393,16 +306,3 @@ traces
 | project timestamp, message
 | order by timestamp desc
 ```
-
----
-
-## Appendix — expression quick reference
-
-**Agent flow body (Part 2.3):**
-```
-addProperty(addProperty(addProperty(addProperty(json('{}'), 'message', triggerBody()?['text']), 'agent_name', 'PA-Health-Benefit-Agent'), 'parameters', addProperty(addProperty(json('{}'), 'user_id', triggerBody()?['text_2']), 'user_full_name', triggerBody()?['text_3'])), 'threadid', triggerBody()?['text_1'])
-```
-
-**Why `addProperty` instead of typing JSON:** values are passed as *arguments*, so the runtime
-JSON-escapes quotes, backslashes, and newlines automatically. Hand-typed JSON with
-`"@{variable}"` breaks as soon as the user types a `"`.
