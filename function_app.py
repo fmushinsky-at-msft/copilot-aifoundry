@@ -631,17 +631,43 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
     conversation_id = req.params.get("conversation_id")
 
     if not question:
+        body = None
         try:
             body = req.get_json()
         except ValueError:
-            body = None
-        if body:
+            # Not valid JSON — log the raw payload so the caller's shape is visible.
+            raw = ""
+            try:
+                raw = req.get_body().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            logging.warning(f"send_hr_email: JSON parse failed. Raw body (truncated): {raw[:1000]}")
+            if raw:
+                try:
+                    body = json.loads(raw)
+                except Exception:
+                    body = None
+
+        # Some callers (certain Power Automate connectors) send the JSON payload
+        # double-encoded as a string. Decode one extra level if needed.
+        if isinstance(body, (str, bytes)):
+            try:
+                body = json.loads(body)
+                logging.info("send_hr_email: decoded double-encoded JSON body.")
+            except Exception:
+                logging.warning("send_hr_email: body was a string but not valid JSON.")
+                body = None
+
+        if isinstance(body, dict):
             question = body.get("question")
             user_full_name = body.get("user_full_name")
             user_id = body.get("user_id")
             conversation_id = body.get("conversation_id")
+        elif body is not None:
+            logging.warning(f"send_hr_email: unexpected body type {type(body).__name__}.")
 
     if not question:
+        logging.warning("send_hr_email: returning 400 - no 'question' in query params or body.")
         return func.HttpResponse(
             json.dumps({"error": "Missing required parameter 'question'"}),
             status_code=400,
