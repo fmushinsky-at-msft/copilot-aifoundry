@@ -614,17 +614,14 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
 
     Request (query string or JSON body):
         - question (required): the user's question to forward
+        - user_email (required): the employee's email; the message is sent from this
+          mailbox so HR sees it as coming directly from them
         - user_full_name (optional): who is asking
         - user_id (optional): employee id
-        - user_email (optional): the employee's email; used as Reply-To so HR can
-          reply directly, and as the sender when SEND_AS_USER is enabled
         - conversation_id (optional): for traceability
 
     Environment variables:
         - HR_TO_ADDRESS (required): destination HR mailbox
-        - HR_FROM_ADDRESS (required): the shared mailbox/service account to send as
-        - SEND_AS_USER (optional): 'true' to send from the employee's own mailbox
-          instead of the shared mailbox (requires broader Mail.Send permission)
     """
     logging.info("send_hr_email trigger invoked.")
 
@@ -680,10 +677,17 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
+    if not user_email:
+        logging.warning("send_hr_email: returning 400 - no 'user_email' supplied.")
+        return func.HttpResponse(
+            json.dumps({"error": "Missing required parameter 'user_email'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
     to_addr = os.environ.get("HR_TO_ADDRESS")
-    from_addr = os.environ.get("HR_FROM_ADDRESS")
-    if not to_addr or not from_addr:
-        logging.error("HR_TO_ADDRESS and HR_FROM_ADDRESS must be set.")
+    if not to_addr:
+        logging.error("HR_TO_ADDRESS must be set.")
         return func.HttpResponse(
             json.dumps({"error": "Server configuration error: HR mailbox not configured."}),
             status_code=500,
@@ -702,9 +706,8 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             "A user question could not be answered by the Benefits assistant and was forwarded for help.",
             "",
             f"From: {who_line}",
+            f"Email: {user_email}",
         ]
-        if user_email:
-            body_lines.append(f"Email: {user_email}")
         if conversation_id:
             body_lines.append(f"Conversation: {conversation_id}")
         body_lines += ["", "Question:", question]
@@ -716,26 +719,11 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             "toRecipients": [{"emailAddress": {"address": to_addr}}],
         }
 
-        # Decide which mailbox actually sends the message.
-        #   Default  : send from the shared mailbox, with Reply-To set to the user
-        #              so HR replies land in the employee's inbox. Requires no extra
-        #              permissions beyond the shared mailbox.
-        #   SEND_AS_USER=true : send directly from the employee's mailbox. This
-        #              requires the managed identity's Mail.Send application
-        #              permission to cover that user's mailbox (widen or remove the
-        #              Exchange Application Access Policy) - review before enabling.
-        send_as_user = os.environ.get("SEND_AS_USER", "").lower() in ("1", "true", "yes")
-
-        if user_email:
-            # Reply-To makes HR replies go straight to the employee.
-            message["replyTo"] = [{"emailAddress": {"address": user_email}}]
-
-        if send_as_user and user_email:
-            sender_mailbox = user_email
-        else:
-            sender_mailbox = from_addr
-            if send_as_user and not user_email:
-                logging.warning("SEND_AS_USER is on but no user_email was supplied; using the shared mailbox.")
+        # The email is always sent from the employee's own mailbox, so HR sees the
+        # request coming directly from them and replies land in their inbox.
+        # This requires the managed identity's Mail.Send application permission to
+        # cover employee mailboxes (see the Exchange Application Access Policy).
+        sender_mailbox = user_email
 
         graph_payload = {
             "message": message,
@@ -757,10 +745,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         with urllib.request.urlopen(request, timeout=30) as resp:
             status = resp.status  # 202 Accepted on success
 
-        logging.info(
-            f"HR email sent (status {status}) to {to_addr} as {sender_mailbox} "
-            f"(replyTo={user_email or 'none'})."
-        )
+        logging.info(f"HR email sent (status {status}) to {to_addr} as {sender_mailbox}.")
         return func.HttpResponse(
             json.dumps({"sent": True, "message": "Your question has been emailed to HR."}),
             status_code=200,

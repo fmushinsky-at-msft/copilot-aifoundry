@@ -22,16 +22,16 @@
 #       -FunctionAppName "myfunc" `
 #       -ResourceGroup "myrg" `
 #       -HrToAddress "OpenEnrollment@panynj.gov" `
-#       -HrFromAddress "benefits-bot@panynj.gov" `
-#       -AllowedSendersGroup "bot-allowed-senders@panynj.gov"
+#       -AssistantUsersGroup "benefits-assistant-users@panynj.gov" `
+#       -TestMailbox "steven.choy@panynj.gov"
 # =============================================================================
 
 param(
 	[Parameter(Mandatory = $true)] [string] $FunctionAppName,
 	[Parameter(Mandatory = $true)] [string] $ResourceGroup,
 	[Parameter(Mandatory = $true)] [string] $HrToAddress,
-	[Parameter(Mandatory = $true)] [string] $HrFromAddress,
-	[Parameter(Mandatory = $true)] [string] $AllowedSendersGroup,
+	[Parameter(Mandatory = $true)] [string] $AssistantUsersGroup,
+	[string] $TestMailbox = "",
 	[string] $AppInsightsConnectionString = "",
 	[switch] $SkipFunctionSettings,
 	[switch] $SkipGraphGrant,
@@ -53,8 +53,7 @@ if (-not $SkipFunctionSettings) {
 	Write-Section "Section 1: Function App settings"
 
 	$settings = @(
-		"HR_TO_ADDRESS=$HrToAddress",
-		"HR_FROM_ADDRESS=$HrFromAddress"
+		"HR_TO_ADDRESS=$HrToAddress"
 	)
 	if ($AppInsightsConnectionString -ne "") {
 		$settings += "APPLICATIONINSIGHTS_CONNECTION_STRING=$AppInsightsConnectionString"
@@ -158,7 +157,7 @@ if (-not $SkipExchangePolicy) {
 
 		# Idempotency: check for an existing policy for this app.
 		$existingPolicy = Get-ApplicationAccessPolicy -ErrorAction SilentlyContinue |
-			Where-Object { $_.AppId -eq $miAppId -and $_.ScopeIdentity -eq $AllowedSendersGroup }
+			Where-Object { $_.AppId -eq $miAppId -and $_.ScopeIdentity -eq $AssistantUsersGroup }
 
 		if ($existingPolicy) {
 			Write-Host "An Application Access Policy for this app + group already exists. Skipping." -ForegroundColor Green
@@ -166,20 +165,25 @@ if (-not $SkipExchangePolicy) {
 		else {
 			New-ApplicationAccessPolicy `
 				-AppId $miAppId `
-				-PolicyScopeGroupId $AllowedSendersGroup `
+				-PolicyScopeGroupId $AssistantUsersGroup `
 				-AccessRight RestrictAccess `
-				-Description "Benefits bot may send only as the benefits shared mailbox" | Out-Null
-			Write-Host "Created Application Access Policy restricting the app to $AllowedSendersGroup." -ForegroundColor Green
+				-Description "Benefits assistant may send only as enrolled assistant users" | Out-Null
+			Write-Host "Created Application Access Policy restricting the app to $AssistantUsersGroup." -ForegroundColor Green
 			Write-Host "Allow up to ~30 minutes for the policy to take effect." -ForegroundColor Yellow
 		}
 
-		Write-Host "Testing access policy against the sender mailbox ..."
-		try {
-			$test = Test-ApplicationAccessPolicy -Identity $HrFromAddress -AppId $miAppId
-			Write-Host "Test-ApplicationAccessPolicy result for $HrFromAddress : $($test.AccessCheckResult)" -ForegroundColor Green
+		if ($TestMailbox -ne "") {
+			Write-Host "Testing access policy against $TestMailbox ..."
+			try {
+				$test = Test-ApplicationAccessPolicy -Identity $TestMailbox -AppId $miAppId
+				Write-Host "Test-ApplicationAccessPolicy result for $TestMailbox : $($test.AccessCheckResult)" -ForegroundColor Green
+			}
+			catch {
+				Write-Host "Could not run Test-ApplicationAccessPolicy yet (may need propagation): $_" -ForegroundColor Yellow
+			}
 		}
-		catch {
-			Write-Host "Could not run Test-ApplicationAccessPolicy yet (may need propagation): $_" -ForegroundColor Yellow
+		else {
+			Write-Host "Skipping policy test (pass -TestMailbox <user@domain> to verify)." -ForegroundColor Yellow
 		}
 	}
 }
