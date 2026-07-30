@@ -1,113 +1,164 @@
-# Copilot Studio & Power Automate — Detailed Implementation Guide
+# Copilot Studio & Power Automate — Step-by-Step Guide (Email to HR)
 
 Companion to **EMAIL_HR_DEPLOYMENT_CHECKLIST.md**, expanding Sections **8 and 9** into
 click-by-click instructions.
 
-**Goal:** When the Benefit agent cannot answer a question, Teams offers to email the question
-to HR; on *Yes*, the Azure Function sends the email.
+**What you will build:** When the Benefits agent cannot answer a question, it asks the user
+*"Would you like me to email your question to HR?"*. If the user chooses **Yes**, a
+Power Automate flow calls your Azure Function, which emails the question to HR.
 
-**Assumed already done** (from the main checklist):
-- Function code deployed, exposing `agent_httptrigger` (returns `canAnswer`) and `send_hr_email`.
-- Function App settings, managed identity, Graph `Mail.Send`, Exchange policy configured.
-- Foundry agent instructed to emit `NO_ANSWER` when it cannot answer.
+**Who this is for:** Someone who has never used Copilot Studio or Power Automate before.
+Every step says where to click and what you should see afterwards.
+
+**Time required:** About 45–60 minutes.
 
 ---
 
 ## Table of contents
-- [Part 0 — Orientation: where things live](#part-0--orientation-where-things-live)
-- [Part 1 — Create the `send_hr_email` flow (Section 9)](#part-1--create-the-send_hr_email-flow-section-9)
-- [Part 2 — Topic logic: offer & send (Section 8)](#part-2--topic-logic-offer--send-section-8)
+- [Before you begin](#before-you-begin)
+- [Part 0 — Orientation for first-time users](#part-0--orientation-for-first-time-users)
+- [Part 1 — Create the "Send HR Email" flow (Section 9)](#part-1--create-the-send-hr-email-flow-section-9)
+- [Part 2 — Add the conversation logic (Section 8)](#part-2--add-the-conversation-logic-section-8)
 - [Part 3 — Publish and test](#part-3--publish-and-test)
 - [Part 4 — Troubleshooting](#part-4--troubleshooting)
+- [Glossary](#glossary)
 
 ---
 
-## Part 0 — Orientation: where things live
+## Before you begin
 
-Two different web apps are involved. Keep both open in separate browser tabs.
+### Already completed (from the main checklist)
+- Function code deployed, exposing `agent_httptrigger` (returns `canAnswer`) and `send_hr_email`.
+- Function App settings, managed identity, Graph `Mail.Send`, Exchange policy configured.
+- Foundry agent instructed to emit `NO_ANSWER` when it cannot answer.
 
-| Tool | URL | What you do there |
+### Licensing — read this first
+The **HTTP** action used in Part 1 is a **premium connector**. You need a
+**Power Automate Premium** licence (or an equivalent Power Apps / Dynamics licence) on the
+account that will run the flow.
+
+- Without premium, the HTTP action shows a **Premium** badge and the flow fails at run time.
+- **Workaround:** ask your admin for the licence, or route the call through a connector
+  already approved in your tenant.
+
+### Values to collect now
+Write these down before starting; you will paste them later.
+
+| What | Where to find it | Example |
 |---|---|---|
-| **Copilot Studio** | https://copilotstudio.microsoft.com | Topics (conversation logic), publishing the agent |
-| **Power Automate** | https://make.powerautomate.com | Flows that call your Azure Function (HTTP actions) |
-
-### Confirm you are in the right environment
-1. Open **Copilot Studio**.
-2. Top-right, next to your profile picture, find the **environment picker** (shows an
-   environment name such as *Contoso (default)*).
-3. Note the environment name.
-4. Open **Power Automate** and use its environment picker (also top-right) to select the
-   **same environment**.
-
-> If the environments differ, the flow you build will not be visible to your agent.
-
-### Terminology used below
-- **Topic** — a conversation script in Copilot Studio (nodes arranged top to bottom).
-- **Node** — one step in a topic (Send a message, Question, Condition, Call an action).
-- **Action** — a call out to something external; for us, a Power Automate flow that calls
-  the Azure Function.
-- **Variable** — a value stored during the conversation, e.g. `Topic.EmailHR`.
+| Function App name | Azure Portal → your Function App → **Overview** | `pa-benefits-func` |
+| Function key for `send_hr_email` | Azure Portal → Function App → **Functions** → click `send_hr_email` → **Function Keys** → copy `default` | `abc123...==` |
+| Environment name | Copilot Studio, top-right environment picker | `Contoso (default)` |
 
 ---
 
-## Part 1 — Create the `send_hr_email` flow (Section 9)
+## Part 0 — Orientation for first-time users
 
-This flow is what the topic calls when the user says *Yes*. It POSTs to the Azure Function.
+### The two websites you will use
+Keep both open in separate browser tabs.
 
-### 1.1 Gather what you need first
-- Function App name, e.g. `pa-benefits-func`.
-- The **function key** for `send_hr_email`:
-  - Azure Portal → **Function App** → **Functions** → click **send_hr_email** →
-	left menu **Function Keys** → copy the **default** key value.
-- Resulting URL shape:
-  `https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email`
+| Website | URL | What it is for |
+|---|---|---|
+| **Copilot Studio** | https://copilotstudio.microsoft.com | Building the agent's conversation logic |
+| **Power Automate** | https://make.powerautomate.com | Building the flow that calls your Azure Function |
 
-### 1.2 Create the flow from Copilot Studio (recommended path)
-Creating it from inside Copilot Studio automatically wires it as an available action.
+### Step 0.1 — Make sure both are in the SAME environment
+An *environment* is a container that holds your agent and your flows. If they differ, your
+agent will not be able to see the flow.
 
-1. Open **Copilot Studio** → select your agent (**PA-Health-Benefit-Agent** experience).
-2. Left navigation → **Actions** (in some tenants this is under **Tools** or **Plugins**).
-3. Click **+ Add an action** (or **New action**).
-4. Choose **New flow** (this opens the Power Automate designer in a new tab, pre-wired with
-   a Copilot Studio trigger).
-5. You will see a trigger named **"When an agent calls the flow"** (older label:
-   *"When Power Virtual Agents calls a flow"*).
+1. Open **Copilot Studio**.
+2. Look at the **top-right corner**, left of your profile picture — you will see an
+   environment name (for example *Contoso (default)*).
+3. Click it to see the environments you can access. Note the one your agent is in.
+4. Open **Power Automate** in another tab.
+5. Top-right, click its environment picker and select **the same environment**.
 
-### 1.3 Define the flow inputs
-1. Click the trigger node **When an agent calls the flow**.
-2. Click **+ Add an input**.
-3. Choose **Text**. Name it exactly: `question`
-4. Click **+ Add an input** → **Text** → name it: `user_full_name`
-5. Click **+ Add an input** → **Text** → name it: `user_id`
-6. Click **+ Add an input** → **Text** → name it: `conversation_id`
+✅ **Checkpoint:** both tabs show the same environment name in the top-right.
 
-> Names are case-sensitive when you reference them later. Keep them exactly as above.
+### Step 0.2 — Check how your agent decides what to do (IMPORTANT)
+Modern Copilot Studio agents run in one of two modes. This determines whether the topic you
+build in Part 2 will actually run.
 
-### 1.4 Note the trigger input tokens
-You will reference these inputs in the HTTP body in the next step.
+1. In Copilot Studio, open your agent.
+2. Click **Settings** (top-right) → **Generative AI** (some tenants label this
+   **Orchestration**).
+3. Check the orchestration setting:
 
-1. Click the trigger node **When an agent calls the flow**.
-2. Open the **Dynamic content** panel and hover each input to see its underlying token.
-3. Power Automate names them `text`, `text_1`, `text_2`, `text_3` in the order you created
-   them, which maps to:
+| Setting | Meaning | Effect on this guide |
+|---|---|---|
+| **Generative orchestration = ON** | The AI decides which tools/topics to use | Your custom topic may be skipped — see note below |
+| **Classic orchestration** (generative OFF) | The agent follows topics and trigger phrases | Part 2 works exactly as written |
 
-| Input you created | Token |
-|---|---|
-| `question` | `triggerBody()?['text']` |
-| `user_full_name` | `triggerBody()?['text_1']` |
-| `user_id` | `triggerBody()?['text_2']` |
-| `conversation_id` | `triggerBody()?['text_3']` |
+> **If generative orchestration is ON**, choose one:
+> - **Option A (recommended while building):** switch to **classic orchestration** so your
+>   topic runs predictably after the agent action. This guide assumes Option A.
+> - **Option B:** keep generative orchestration, add the flow as a **tool**, and describe in
+>   the agent's instructions when to use it — e.g. *"If you cannot answer, ask the user
+>   whether to email HR; if they agree, call the Send HR Email tool."* More flexible, less
+>   predictable.
 
-> If your creation order differed, note the actual tokens and use those in the next step.
+### Step 0.3 — Words you will see (plain English)
+- **Agent** — your chatbot (older name: *copilot*).
+- **Topic** — one conversation script, built as boxes (nodes) connected top to bottom.
+- **Node** — a single step inside a topic, e.g. *Send a message*, *Ask a question*.
+- **Tool / Action** — something the agent calls out to. Microsoft renamed **Actions** to
+  **Tools**; you may see either word depending on your tenant.
+- **Flow** — an automation in Power Automate. Yours sends an HTTP request to Azure.
+- **Variable** — a value remembered during a conversation, e.g. `Topic.EmailHR`.
+- **Dynamic content** — the picker that inserts a variable or an earlier step's output.
+- **Publish** — pushes changes live; without it, Teams keeps using the old version.
 
-### 1.5 Add the HTTP action
-1. Below the trigger, click **+** → **Add an action**.
-2. Search **HTTP** → select **HTTP** (the plain "HTTP" action, premium connector).
-3. Configure:
-   - **Method:** `POST`
+---
+
+## Part 1 — Create the "Send HR Email" flow (Section 9)
+
+This flow receives the question from the agent and POSTs it to your Azure Function.
+
+### Step 1.1 — Start a new flow from inside Copilot Studio
+Creating it from Copilot Studio automatically makes it available to your agent.
+
+1. Open **Copilot Studio** and select your agent.
+2. In the left navigation, click **Tools**.
+   - *No "Tools"? Look for **Actions** or **Plugins** — same feature, older name.*
+3. Click **+ Add a tool** (older label: **+ Add an action**).
+4. Choose **New tool** → **Flow**.
+   - *Older tenants: **New action** → **New flow**.*
+5. Power Automate opens in a **new browser tab** with a flow already started.
+
+✅ **Checkpoint:** you see a first box titled **"When an agent calls the flow"**
+(older label: *"When Power Virtual Agents calls a flow"*) and a second box
+**"Respond to the agent"**.
+
+### Step 1.2 — Add the four inputs
+These are the values the agent passes in.
+
+1. Click the first box, **When an agent calls the flow**.
+2. In the panel that opens, click **+ Add an input**.
+3. Choose the type **Text**.
+4. A field appears with a placeholder name. Replace it by typing exactly: `question`
+5. Repeat three more times, always choosing **Text**:
+   - `user_full_name`
+   - `user_id`
+   - `conversation_id`
+
+> Type the names **exactly** as shown (lower case, underscores). They must match what the
+> Azure Function expects.
+
+✅ **Checkpoint:** the trigger box lists four text inputs in this order:
+`question`, `user_full_name`, `user_id`, `conversation_id`.
+
+### Step 1.3 — Add the HTTP action that calls Azure
+1. Hover over the **arrow** below the trigger box; a **+** circle appears. Click it.
+2. Click **Add an action**.
+3. Search for `HTTP`.
+4. Choose the action named simply **HTTP** (globe icon, marked **Premium**).
+5. Fill in the panel:
    - **URI:** `https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email?code=<FUNCTION_KEY>`
-   - **Headers:** add one row → Key `Content-Type`, Value `application/json`
-   - **Body:** enter the JSON below, inserting each value from **Dynamic content**:
+     (replace both placeholders with the values you collected)
+   - **Method:** open the dropdown → **POST**
+   - **Headers:** Key = `Content-Type`, Value = `application/json`
+     *(if headers are not visible, click **Add new parameter** and tick **Headers**)*
+   - **Body:** paste the JSON below
 
 ```json
 {
@@ -118,163 +169,215 @@ You will reference these inputs in the HTTP body in the next step.
 }
 ```
 
-> Alternative to putting the key in the URL: leave the URI without `?code=` and add a second
-> header — Key `x-functions-key`, Value `<FUNCTION_KEY>`. Slightly cleaner (key not in URL logs).
+> **Why `text`, `text_1`, …?** Power Automate names trigger inputs internally in the order
+> you created them. `question` was first so it is `text`; `user_full_name` is `text_1`, etc.
+>
+> **To confirm:** click inside the Body box, open **Dynamic content** (lightning-bolt icon)
+> and hover each input — a tooltip shows its internal name. If your order differs, adjust the
+> JSON so each Azure field receives the correct input.
 
-### 1.6 Parse the function response (optional but recommended)
-Lets the topic show the function's confirmation text.
+> **Safer alternative for the key:** remove `?code=<FUNCTION_KEY>` from the URI and add a
+> second header instead: Key = `x-functions-key`, Value = `<FUNCTION_KEY>`. This keeps the
+> secret out of URL logs.
 
-1. Click **+** → **Add an action** → search **Parse JSON** → select it.
-2. **Content:** Dynamic content → **HTTP** → **Body**.
-3. **Schema:** click **Generate from sample** and paste:
+✅ **Checkpoint:** the HTTP box shows Method `POST`, your URI, one header, and the JSON body.
+
+### Step 1.4 — Read the function's reply (recommended)
+This lets the agent display the confirmation text the function returns.
+
+1. Click **+** below the HTTP box → **Add an action**.
+2. Search `Parse JSON` → select **Parse JSON** (under *Data Operation*).
+3. **Content:** click the field → **Dynamic content** → under **HTTP** choose **Body**.
+4. **Schema:** click **Use sample payload to generate schema** (older label:
+   *Generate from sample*), paste the text below, then click **Done**:
+
 ```json
 { "sent": true, "message": "Your question has been emailed to HR." }
 ```
-4. Click **Done**.
 
-### 1.7 Return a value to Copilot Studio
-1. Click **+** → **Add an action** → search **Respond to the agent** (older label:
-   *"Respond to Power Virtual Agents"*) → select it.
-2. Click **+ Add an output** → **Text** → name it `result`.
-3. Set its value: Dynamic content → from **Parse JSON**, choose **message**
-   (or, if you skipped Parse JSON, use **HTTP → Body**).
+✅ **Checkpoint:** the Parse JSON box shows a schema containing `sent` and `message`.
 
-### 1.8 Name and save
-1. Click the flow name at the top-left → rename to **Send HR Email**.
-2. Click **Save** (top-right).
-3. Wait for "Your flow is ready to go" / the save confirmation.
+### Step 1.5 — Send a result back to the agent
+1. Click the **Respond to the agent** box created in Step 1.1.
+   - *Missing?* Click **+** → **Add an action** → search **Respond to the agent**
+     (older label: *Respond to Power Virtual Agents*).
+2. Click **+ Add an output** → choose **Text**.
+3. Name it exactly: `result`
+4. Click its value box → **Dynamic content** → under **Parse JSON** choose **message**.
+   - *If you skipped Step 1.4:* choose **HTTP → Body**.
+
+✅ **Checkpoint:** the respond box has one text output named `result` with a dynamic value.
+
+### Step 1.6 — Name and save the flow
+1. At the **top-left**, click the flow name (may say *Untitled*).
+2. Type: `Send HR Email`
+3. Click **Save** (top-right).
+4. Wait for the confirmation banner.
+
+✅ **Checkpoint:** the flow is named **Send HR Email** and saved without errors.
+
+### Step 1.7 — Return to Copilot Studio
+1. Switch back to the Copilot Studio tab.
+2. Refresh the page (F5) so the new flow is picked up.
+3. Open **Tools** — **Send HR Email** should now be listed.
+
+✅ **Checkpoint:** *Send HR Email* appears in the agent's Tools list.
 
 ---
 
-## Part 2 — Topic logic: offer & send (Section 8)
+## Part 2 — Add the conversation logic (Section 8)
 
-### 2.1 Open the topic
-1. Go to **Copilot Studio** → select your agent.
+Here you tell the agent: *if the answer failed, offer to email HR.*
+
+### Step 2.1 — Open the topic that calls your agent Function
+1. In Copilot Studio, open your agent.
 2. Left navigation → **Topics**.
-3. Open the topic that calls the agent action. If your agent uses a single main topic, it may
-   be named **Conversational boosting**, **Fallback**, or a custom name such as
-   *Ask Benefits*.
-4. The authoring canvas opens showing nodes top to bottom.
+3. The list is split into your own topics and **System** topics.
+4. Open the topic that calls `agent_httptrigger`. Common names:
+   - a custom topic such as *Ask Benefits*
+   - **Conversational boosting** (system topic)
+   - **Fallback** (system topic)
+5. The **authoring canvas** opens showing a vertical chain of boxes.
 
-### 2.2 Confirm the agent action returns `canAnswer`
-1. Locate the **Call an action** node that invokes the agent flow (`agent_httptrigger`).
-2. Click it and look at the **Outputs** section — you should see `message`, `threadId`,
-   and `canAnswer`.
-3. **If `canAnswer` is missing:**
-   - The flow's response schema is stale. Open the agent flow in Power Automate,
-	 run it once (**Test → Manually**), then in the flow's **Respond to the agent** action
-	 add an output named `canAnswer` (type **Boolean**) bound to the function's `canAnswer`
-	 field (via **Parse JSON** on the HTTP body).
-   - Save the flow, return to Copilot Studio, remove and re-add the action node so the schema
-	 refreshes.
+> **Not sure which topic?** Open each candidate and look for a node that calls a flow/action
+> matching your agent Function. That is the one.
 
-> The function returns JSON like:
-> `{ "message": "...", "threadId": "conv_...", "canAnswer": false }`
-> The flow must surface `canAnswer` as an output for the topic to branch on it.
+### Step 2.2 — Verify the agent action returns `canAnswer`
+1. Click the node that calls your agent flow.
+2. Check its **Outputs** — you need `message`, `threadId`, and `canAnswer`.
 
-### 2.3 Save the question into a variable (if not already)
-You need the original user question later for the email.
-1. Find where the user's question is captured (often `Activity.Text` or a topic variable).
-2. If it is not already stored, add a **Set a variable value** node just before the action:
-   - **Set variable:** create `Topic.UserQuestion`
-   - **To value:** select **System.Activity.Text** (or the existing question variable).
+**If `canAnswer` is missing**, the flow calling `agent_httptrigger` is not returning it yet:
+1. Open that flow in Power Automate.
+2. Add a **Parse JSON** step after its HTTP action, using this sample:
+```json
+{ "message": "text", "threadId": "text", "canAnswer": true }
+```
+3. In that flow's **Respond to the agent** step, click **+ Add an output** → **Yes/No**
+   (Boolean) → name it `canAnswer` → set its value from Parse JSON → `canAnswer`.
+4. **Save** the flow.
+5. Back in Copilot Studio, **delete the action node and add it again** so it picks up the new
+   output.
 
-### 2.4 Add the condition on `canAnswer`
-1. Click the **+** below the **Call an action** node.
-2. Select **Add a condition**.
-3. In the condition node:
-   - Left side: click the variable selector → choose the action's **canAnswer** output.
-   - Operator: **is equal to**
-   - Right side: click the value box → switch the type selector to **Boolean** → choose
-	 **false**.
-4. The node now shows two branches: the condition's **true** path and **All other conditions**
-   (else).
+✅ **Checkpoint:** the action node lists `canAnswer` among its outputs.
 
-> Result: **true** branch = the agent could NOT answer. **Else** branch = normal answer.
+### Step 2.3 — Store the user's question for later
+The email needs the original question, so save it into a variable.
 
-### 2.5 Build the "could not answer" branch
-Work inside the **true** branch (`canAnswer = false`).
+1. Click the **+** just **above** the agent action node → **Variable management** →
+   **Set a variable value**.
+2. **Set variable:** click the box → **Create a new variable** → rename it `UserQuestion`.
+3. **To value:** click the box → **System** tab → choose **Activity.Text**.
 
-**a) Show the agent's apology message**
-1. Click **+** inside the true branch → **Send a message**.
-2. In the message box, click the **{x}** (insert variable) icon → select the action's
+> If your topic already stores the question in a variable, skip this and use that variable
+> later instead.
+
+✅ **Checkpoint:** a *Set a variable value* node sets `Topic.UserQuestion` before the action.
+
+### Step 2.4 — Add the branch on `canAnswer`
+1. Click the **+** **below** the agent action node.
+2. Choose **Add a condition**.
+3. **Left box:** click it → choose the action's **canAnswer** output.
+4. **Operator:** leave as **is equal to**.
+5. **Right box:** click it, set the value type to **Boolean**, then choose **false**.
+
+> ⚠️ **Common mistake:** entering the word `false` as **text**. It must be the **Boolean**
+> value `false`, or the condition will never match.
+
+6. The node now has two paths:
+   - the **condition path** = the agent could NOT answer
+   - **All other conditions** = the agent answered normally
+
+✅ **Checkpoint:** the canvas shows a condition splitting into two branches.
+
+### Step 2.5 — Build the "could not answer" branch
+
+**a) Show the agent's apology**
+1. Click **+** inside the condition (true) branch → **Send a message**.
+2. In the message box, click the **{x}** icon (insert variable) → choose the action's
    **message** output.
 
 **b) Ask the Yes/No question**
 1. Click **+** below it → **Ask a question**.
-2. **Enter a message:**
+2. In **Enter a message**, type:
    `I couldn't find that in the benefits materials. Would you like me to email your question to HR?`
-3. **Identify:** open the dropdown → select **Multiple choice options**.
+3. Under **Identify**, open the dropdown → choose **Multiple choice options**.
 4. Under **Options for user**, click **+ New option** → type `Yes`.
 5. Click **+ New option** again → type `No`.
-6. On the right, find **Save response as** → click the variable name → rename it to
-   `EmailHR` (it becomes `Topic.EmailHR`).
+6. On the right of the node, find **Save response as**, click the variable name and rename it
+   to `EmailHR`.
 
-**c) Branch on the answer**
-Copilot Studio automatically creates a branch per option when you use multiple choice.
-1. You should now see two paths: **Yes** and **No**.
-2. If you instead see a single path, add a **Condition** node:
-   `Topic.EmailHR` **is equal to** `Yes`.
+✅ **Checkpoint:** the question node shows two options (Yes, No) and saves to `Topic.EmailHR`.
+Copilot Studio automatically creates a branch for each option.
 
-**d) On the Yes path — call the email flow**
-1. Click **+** in the **Yes** branch → **Call an action**.
-2. Select **Send HR Email** (the flow from Part 1).
-3. Fill the inputs that appear:
-   | Input | Set to |
-   |---|---|
-   | `question` | `Topic.UserQuestion` (or `System.Activity.Text`) |
-   | `user_full_name` | your user-name variable (same source as `text_3`) |
-   | `user_id` | your user-id variable (same source as `text_2`) |
-   | `conversation_id` | the agent action's **threadId** output |
-   - For each, click the field → **{x}** → pick the variable.
-4. Click **+** below the action → **Send a message**.
-5. Insert the flow's **result** output (the confirmation text), or type a static message:
+**c) On the Yes branch — call the flow**
+1. Click **+** inside the **Yes** branch → **Add a tool** (older: **Call an action**).
+2. Choose **Send HR Email**.
+3. Set each input by clicking the field, then the **{x}** icon:
+
+| Input | Set to |
+|---|---|
+| `question` | `Topic.UserQuestion` |
+| `user_full_name` | your user-name variable |
+| `user_id` | your user-id variable |
+| `conversation_id` | the agent action's **threadId** output |
+
+4. Click **+** below the tool node → **Send a message**.
+5. Either insert the flow's **result** output using **{x}**, or type a fixed message:
    `Thanks — I've emailed your question to HR. They'll follow up with you directly.`
 
-**e) On the No path**
-1. Click **+** in the **No** branch → **Send a message**.
+**d) On the No branch**
+1. Click **+** inside the **No** branch → **Send a message**.
 2. Type: `No problem. Let me know if there's anything else I can help with.`
 
-### 2.6 Build the normal branch
-1. In the **All other conditions** (else) branch — meaning `canAnswer = true`:
-2. Click **+** → **Send a message**.
-3. Insert the action's **message** output so the user sees the normal answer.
+✅ **Checkpoint:** the Yes branch calls the flow and confirms; the No branch closes politely.
 
-### 2.7 Save
-1. Click **Save** (top-right of the topic canvas).
-2. Resolve any red error markers on nodes (usually an unset variable or empty message).
+### Step 2.6 — Build the normal branch
+1. Go to the **All other conditions** branch (meaning `canAnswer` was true).
+2. Click **+** → **Send a message**.
+3. Insert the action's **message** output with **{x}** so the user sees the normal answer.
+
+### Step 2.7 — Save the topic
+1. Click **Save** (top-right of the canvas).
+2. Fix any red error icons (usually an empty message or unset variable) and save again.
+
+✅ **Checkpoint:** the topic saves with no errors.
 
 ---
 
 ## Part 3 — Publish and test
 
-### 3.1 Publish the agent
+### Step 3.1 — Publish
 1. In Copilot Studio, click **Publish** (top-right).
-2. Confirm **Publish** in the dialog.
-3. Wait for "Publish succeeded".
+2. Confirm in the dialog.
+3. Wait for the success message.
 
-> Changes are **not** visible in Teams until you publish.
+> ⚠️ Until you publish, **Teams still runs the old version**. Publish after every change.
 
-### 3.2 Test in the Copilot Studio test pane first
-1. Open the **Test your agent** panel (right side; toggle at top-right if hidden).
-2. Ask a question the agent **can** answer (e.g. *What medical plans are available?*).
-   - Expect: a normal answer, no email prompt.
-3. Ask a question it **cannot** answer (e.g. *What is the company pet policy?*).
-   - Expect: the apology, then *"Would you like me to email your question to HR?"* with
-	 **Yes** / **No** buttons.
+### Step 3.2 — Test inside Copilot Studio first
+The test panel is faster than Teams for finding mistakes.
+
+1. Open the **Test** panel (right side; if hidden, click **Test** at the top-right).
+2. Ask something the agent **can** answer, e.g. *What medical plans are available?*
+   - Expect a normal answer, **no** email prompt.
+3. Ask something it **cannot** answer, e.g. *What is the company pet policy?*
+   - Expect the apology, then the question with **Yes** / **No** buttons.
 4. Click **Yes**.
-   - Expect: the confirmation message.
-5. Check the HR mailbox for the forwarded question.
+   - Expect the confirmation message.
+5. Check the HR mailbox — the email should have arrived.
 
-### 3.3 Test in Teams
+> **Tip:** enable **Track between topics** (toggle at the top of the Test panel) to watch each
+> node light up on the canvas as it runs. This makes debugging much easier.
+
+### Step 3.3 — Test in Teams
 1. Open the agent in **Teams**.
-2. Repeat the "cannot answer" question.
+2. Ask the same "cannot answer" question.
 3. Click **Yes** and confirm the email arrives.
 
-### 3.4 Verify on the Azure side
-- Function App → **Log stream** should show:
-  - `canAnswer=False` for the unanswerable question.
-  - `send_hr_email trigger invoked.` then `HR email sent (status 202) ...`
+### Step 3.4 — Confirm on the Azure side
+Azure Portal → your Function App → **Log stream**. You should see:
+- `canAnswer=False` for the unanswerable question
+- `send_hr_email trigger invoked.`
+- `HR email sent (status 202) ...`
 
 ---
 
@@ -282,23 +385,26 @@ Copilot Studio automatically creates a branch per option when you use multiple c
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `canAnswer` not listed in action outputs | Flow response schema missing/stale | Add `canAnswer` output in **Respond to the agent**; re-add the action node in the topic |
-| Condition never takes the "false" path | Comparing a string to a boolean | Ensure the value selector is set to **Boolean** `false`, not the text `"false"` |
-| Agent never says it cannot answer | `NO_ANSWER` instruction missing | Add the instruction in Foundry (main checklist Section 6) and save the agent |
-| Yes/No buttons do not appear | Question node not set to multiple choice | Set **Identify** = *Multiple choice options* and add **Yes**/**No** |
-| Email flow fails with 401/403 | Function key missing or wrong | Re-copy the key; verify `?code=` or `x-functions-key` header |
-| Email flow returns 502 `Authorization_RequestDenied` | Graph `Mail.Send` not granted | Complete main checklist Section 3 |
-| Email flow returns 502 `ErrorAccessDenied` | Exchange policy excludes the mailbox | Complete/await main checklist Section 4 |
-| `400 Missing required parameter 'question'` | Input name mismatch | Flow HTTP body must produce the JSON key `question` |
-| Changes not visible in Teams | Agent not published | Click **Publish** in Copilot Studio |
+| My topic never runs | Generative orchestration is choosing its own path | See Step 0.2 — switch to classic orchestration, or expose the flow as a tool |
+| `Send HR Email` not listed in Copilot Studio | Page not refreshed, or wrong environment | Refresh (F5); confirm both tabs use the same environment (Step 0.1) |
+| HTTP action shows a "Premium" warning | No Power Automate Premium licence | Request the licence from your admin |
+| `canAnswer` not listed in action outputs | The agent flow does not return it | Follow Step 2.2, then delete and re-add the action node |
+| Condition never takes the "cannot answer" path | Compared text `"false"` instead of Boolean `false` | Re-open the condition; set the right side type to **Boolean** → `false` |
+| Agent never says it cannot answer | `NO_ANSWER` instruction missing | Add it in Foundry (main checklist Section 6) and save the agent |
+| Yes/No buttons do not appear | Question node not set to multiple choice | Set **Identify** = *Multiple choice options*, add **Yes** and **No** |
+| Flow fails with 401 or 403 | Wrong or missing function key | Re-copy the key; check `?code=` or the `x-functions-key` header |
+| Flow returns 502 `Authorization_RequestDenied` | Graph `Mail.Send` not granted | Complete main checklist Section 3 |
+| Flow returns 502 `ErrorAccessDenied` | Exchange policy excludes the mailbox | Complete/await main checklist Section 4 |
+| `400 Missing required parameter 'question'` | Body field names do not match | Ensure the HTTP body uses the key `question` (Step 1.3) |
+| Works in the Test panel but not in Teams | Not published | Click **Publish** (Step 3.1) |
 
-### Where to look at run details
-- **Power Automate:** left nav → **My flows** → open the flow → **28-day run history** →
-  click a run → expand each step to see **Inputs**/**Outputs**.
-- **Copilot Studio:** open the topic → **Test your agent** panel → enable
-  **Track between topics** to watch node-by-node execution.
-- **Azure:** Function App → **Log stream**, or Application Insights →
-  **Logs** with:
+### Where to see what actually happened
+- **Power Automate:** left nav → **My flows** → open **Send HR Email** → **28-day run
+  history** → click a run → expand each step to inspect **Inputs** and **Outputs**. This
+  shows the exact JSON sent to Azure and the response received.
+- **Copilot Studio:** the **Test** panel with **Track between topics** enabled.
+- **Azure:** Function App → **Log stream**, or Application Insights → **Logs**:
+
 ```kql
 traces
 | where timestamp > ago(30m)
@@ -306,3 +412,24 @@ traces
 | project timestamp, message
 | order by timestamp desc
 ```
+
+---
+
+## Glossary
+
+| Term | Meaning |
+|---|---|
+| **Agent** | Your chatbot in Copilot Studio (previously called a *copilot*) |
+| **Environment** | A container holding agents, flows and data; everything must live in the same one |
+| **Topic** | A conversation script made of connected nodes |
+| **Node** | One step in a topic (message, question, condition, tool call) |
+| **Tool / Action** | Something the agent calls out to, such as a Power Automate flow |
+| **Flow** | An automation in Power Automate |
+| **Trigger** | The first step of a flow; what starts it |
+| **Connector** | A pre-built integration in Power Automate (HTTP, Outlook, …) |
+| **Premium connector** | A connector requiring a paid licence (HTTP is one) |
+| **Dynamic content** | The picker used to insert variables or earlier step outputs |
+| **Variable** | A stored value, e.g. `Topic.EmailHR` |
+| **System variable** | Built-in value from Copilot Studio, e.g. `System.Activity.Text` |
+| **Orchestration** | How the agent decides what to do — *classic* (topics/trigger phrases) or *generative* (AI chooses) |
+| **Publish** | Makes your saved changes live for users |
