@@ -32,6 +32,12 @@ Every step says where to click and what you should see afterwards.
 - Function App settings, managed identity, Graph `Mail.Send`, Exchange policy configured.
 - Foundry agent instructed to emit `NO_ANSWER` when it cannot answer.
 
+### Permissions you need
+- You must be a **maker** in the Power Platform environment (able to edit the agent and
+  create flows). If Copilot Studio opens read-only, or you cannot create a flow, ask your
+  Power Platform admin to grant you the **Environment Maker** role.
+- You need access to the **Azure Portal** to copy the function key.
+
 ### Licensing — read this first
 The **HTTP** action used in Part 1 is a **premium connector**. You need a
 **Power Automate Premium** licence (or an equivalent Power Apps / Dynamics licence) on the
@@ -40,6 +46,10 @@ account that will run the flow.
 - Without premium, the HTTP action shows a **Premium** badge and the flow fails at run time.
 - **Workaround:** ask your admin for the licence, or route the call through a connector
   already approved in your tenant.
+
+### Browser tip
+Power Automate opens in **new browser tabs** from Copilot Studio. If nothing happens when
+you click, check that your browser is not blocking pop-ups for these sites.
 
 ### Values to collect now
 Write these down before starting; you will paste them later.
@@ -54,6 +64,37 @@ Write these down before starting; you will paste them later.
 
 ## Part 0 — Orientation for first-time users
 
+### How the pieces fit together (read this once)
+There are **two separate flows**. Knowing which is which prevents most confusion later.
+
+```
+Teams user
+    |
+    v
+Copilot Studio agent  ──►  TOPIC (conversation script)
+    |                          |
+    |   1) already exists      +--► FLOW A: "call the agent"
+    |                          |      calls  agent_httptrigger
+    |                          |      returns message, threadId, canAnswer
+    |                          |
+    |   2) you build this      +--► FLOW B: "Send HR Email"
+    |                                 calls  send_hr_email
+    |                                 sends the email via Azure
+    v
+Azure Function App
+```
+
+| | Flow A | Flow B |
+|---|---|---|
+| Name | whatever your agent already uses | **Send HR Email** |
+| Azure route | `agent_httptrigger` | `send_hr_email` |
+| Status | **already exists** | **you create it in Part 1** |
+| You touch it in | Part 2, Step 2.2 (only if `canAnswer` is missing) | Part 1 (build it) |
+
+**In plain terms:** Flow A asks the agent a question. If the agent could not answer
+(`canAnswer = false`), the topic offers to email HR. If the user says Yes, the topic calls
+Flow B, which sends the email.
+
 ### The two websites you will use
 Keep both open in separate browser tabs.
 
@@ -61,6 +102,15 @@ Keep both open in separate browser tabs.
 |---|---|---|
 | **Copilot Studio** | https://copilotstudio.microsoft.com | Building the agent's conversation logic |
 | **Power Automate** | https://make.powerautomate.com | Building the flow that calls your Azure Function |
+
+### Step 0.0 — Open your agent
+1. Go to https://copilotstudio.microsoft.com and sign in with your work account.
+2. In the left navigation, click **Agents** (older label: **Chatbots** or **Copilots**).
+3. Click your Benefits agent in the list to open it.
+4. You now see the agent's own left navigation: **Overview**, **Knowledge**, **Tools**,
+   **Topics**, **Analytics**, **Channels**, **Settings**.
+
+✅ **Checkpoint:** the agent's name is shown at the top and you can see the menu items above.
 
 ### Step 0.1 — Make sure both are in the SAME environment
 An *environment* is a container that holds your agent and your flows. If they differ, your
@@ -216,7 +266,29 @@ This lets the agent display the confirmation text the function returns.
 
 ✅ **Checkpoint:** the flow is named **Send HR Email** and saved without errors.
 
-### Step 1.7 — Return to Copilot Studio
+### Step 1.7 — Test the flow on its own (strongly recommended)
+Testing now means that if something breaks later, you know it is *not* the flow.
+
+1. In the Power Automate designer, click **Test** (top-right).
+2. Choose **Manually** → **Test**.
+3. Power Automate asks for the four inputs. Type sample values:
+   - `question` → `Test from Power Automate`
+   - `user_full_name` → `Test User`
+   - `user_id` → `TEST01`
+   - `conversation_id` → `test-001`
+4. Click **Run flow** → **Done**.
+5. Watch the run. Every step should show a **green tick**.
+6. Click the **HTTP** step and check **Outputs** → **Status code** should be **200**, and the
+   body should read `{"sent": true, ...}`.
+7. Check the HR mailbox — a test email should have arrived.
+
+> **If a step shows a red exclamation mark**, click it and read the error. See
+> [Part 4 — Troubleshooting](#part-4--troubleshooting); the most common causes are a wrong
+> function key (401/403) or Graph permissions not finished (502).
+
+✅ **Checkpoint:** the flow ran green end-to-end and a test email arrived.
+
+### Step 1.8 — Return to Copilot Studio
 1. Switch back to the Copilot Studio tab.
 2. Refresh the page (F5) so the new flow is picked up.
 3. Open **Tools** — **Send HR Email** should now be listed.
@@ -233,7 +305,7 @@ Here you tell the agent: *if the answer failed, offer to email HR.*
 1. In Copilot Studio, open your agent.
 2. Left navigation → **Topics**.
 3. The list is split into your own topics and **System** topics.
-4. Open the topic that calls `agent_httptrigger`. Common names:
+4. Open the topic that calls `agent_httptrigger` (this is **Flow A**). Common names:
    - a custom topic such as *Ask Benefits*
    - **Conversational boosting** (system topic)
    - **Fallback** (system topic)
@@ -241,6 +313,16 @@ Here you tell the agent: *if the answer failed, offer to email HR.*
 
 > **Not sure which topic?** Open each candidate and look for a node that calls a flow/action
 > matching your agent Function. That is the one.
+
+> **What if no topic calls the Function?** Then your agent may be calling the Function as a
+> **tool** under generative orchestration (see Step 0.2). In that case, either switch to
+> classic orchestration and build a topic, or follow Option B in Step 0.2 and drive the
+> behaviour from the agent's instructions instead.
+
+> **Save vs Publish — the difference**
+> - **Save** stores your work in the editor. Only you see it.
+> - **Publish** pushes it live to Teams and other channels.
+> You must do **both**: Save as you go, then Publish at the end (Part 3).
 
 ### Step 2.2 — Verify the agent action returns `canAnswer`
 1. Click the node that calls your agent flow.
@@ -312,14 +394,28 @@ Copilot Studio automatically creates a branch for each option.
 **c) On the Yes branch — call the flow**
 1. Click **+** inside the **Yes** branch → **Add a tool** (older: **Call an action**).
 2. Choose **Send HR Email**.
-3. Set each input by clicking the field, then the **{x}** icon:
+3. Set each input by clicking the field, then the **{x}** icon (or type `{` to open the
+   variable picker):
 
-| Input | Set to |
-|---|---|
-| `question` | `Topic.UserQuestion` |
-| `user_full_name` | your user-name variable |
-| `user_id` | your user-id variable |
-| `conversation_id` | the agent action's **threadId** output |
+| Input | Set to | Where it comes from |
+|---|---|---|
+| `question` | `Topic.UserQuestion` | the variable you created in Step 2.3 |
+| `user_full_name` | the user's display name | see note below |
+| `user_id` | the user's employee id | see note below |
+| `conversation_id` | the agent action's **threadId** output | returned by Flow A |
+
+> **Where do `user_full_name` and `user_id` come from?**
+> These are the same two values your existing **Flow A** already sends to Azure as
+> `parameters.user_full_name` and `parameters.user_id`.
+> To find them:
+> 1. Open the topic and look at the **inputs** already being passed to the Flow A node —
+>    they will be topic variables (e.g. `Topic.UserName`, `Topic.UserId`) or system values.
+> 2. Reuse **exactly those same variables** here.
+>
+> If your agent does not collect them, you can use the built-in Copilot Studio values
+> instead: in the variable picker choose the **System** tab and select
+> **User.DisplayName** for the name. If you have no employee id available, leave `user_id`
+> empty — the Azure Function treats it as optional.
 
 4. Click **+** below the tool node → **Send a message**.
 5. Either insert the flow's **result** output using **{x}**, or type a fixed message:
@@ -385,6 +481,8 @@ Azure Portal → your Function App → **Log stream**. You should see:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| Copilot Studio is read-only / cannot create a flow | Missing maker permission | Ask your admin for the **Environment Maker** role |
+| Clicking "New tool" does nothing | Browser blocked the new tab | Allow pop-ups for Copilot Studio and Power Automate |
 | My topic never runs | Generative orchestration is choosing its own path | See Step 0.2 — switch to classic orchestration, or expose the flow as a tool |
 | `Send HR Email` not listed in Copilot Studio | Page not refreshed, or wrong environment | Refresh (F5); confirm both tabs use the same environment (Step 0.1) |
 | HTTP action shows a "Premium" warning | No Power Automate Premium licence | Request the licence from your admin |
@@ -399,7 +497,7 @@ Azure Portal → your Function App → **Log stream**. You should see:
 | Works in the Test panel but not in Teams | Not published | Click **Publish** (Step 3.1) |
 
 ### Where to see what actually happened
-- **Power Automate:** left nav → **My flows** → open **Send HR Email** → **28-day run
+- **Power Automate:** left nav → **My flows** → open **Send HR Email** (Flow B) → **28-day run
   history** → click a run → expand each step to inspect **Inputs** and **Outputs**. This
   shows the exact JSON sent to Azure and the response received.
 - **Copilot Studio:** the **Test** panel with **Track between topics** enabled.
