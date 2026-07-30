@@ -616,11 +616,15 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         - question (required): the user's question to forward
         - user_full_name (optional): who is asking
         - user_id (optional): employee id
+        - user_email (optional): the employee's email; used as Reply-To so HR can
+          reply directly, and as the sender when SEND_AS_USER is enabled
         - conversation_id (optional): for traceability
 
     Environment variables:
         - HR_TO_ADDRESS (required): destination HR mailbox
         - HR_FROM_ADDRESS (required): the shared mailbox/service account to send as
+        - SEND_AS_USER (optional): 'true' to send from the employee's own mailbox
+          instead of the shared mailbox (requires broader Mail.Send permission)
     """
     logging.info("send_hr_email trigger invoked.")
 
@@ -628,6 +632,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
     question = req.params.get("question")
     user_full_name = req.params.get("user_full_name")
     user_id = req.params.get("user_id")
+    user_email = req.params.get("user_email")
     conversation_id = req.params.get("conversation_id")
 
     if not question:
@@ -662,6 +667,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             question = body.get("question")
             user_full_name = body.get("user_full_name")
             user_id = body.get("user_id")
+            user_email = body.get("user_email")
             conversation_id = body.get("conversation_id")
         elif body is not None:
             logging.warning(f"send_hr_email: unexpected body type {type(body).__name__}.")
@@ -697,22 +703,47 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             "",
             f"From: {who_line}",
         ]
+        if user_email:
+            body_lines.append(f"Email: {user_email}")
         if conversation_id:
             body_lines.append(f"Conversation: {conversation_id}")
         body_lines += ["", "Question:", question]
         email_text = "\n".join(body_lines)
 
+        message = {
+            "subject": "Benefits question forwarded from the assistant",
+            "body": {"contentType": "Text", "content": email_text},
+            "toRecipients": [{"emailAddress": {"address": to_addr}}],
+        }
+
+        # Decide which mailbox actually sends the message.
+        #   Default  : send from the shared mailbox, with Reply-To set to the user
+        #              so HR replies land in the employee's inbox. Requires no extra
+        #              permissions beyond the shared mailbox.
+        #   SEND_AS_USER=true : send directly from the employee's mailbox. This
+        #              requires the managed identity's Mail.Send application
+        #              permission to cover that user's mailbox (widen or remove the
+        #              Exchange Application Access Policy) - review before enabling.
+        send_as_user = os.environ.get("SEND_AS_USER", "").lower() in ("1", "true", "yes")
+
+        if user_email:
+            # Reply-To makes HR replies go straight to the employee.
+            message["replyTo"] = [{"emailAddress": {"address": user_email}}]
+
+        if send_as_user and user_email:
+            sender_mailbox = user_email
+        else:
+            sender_mailbox = from_addr
+            if send_as_user and not user_email:
+                logging.warning("SEND_AS_USER is on but no user_email was supplied; using the shared mailbox.")
+
         graph_payload = {
-            "message": {
-                "subject": "Benefits question forwarded from the assistant",
-                "body": {"contentType": "Text", "content": email_text},
-                "toRecipients": [{"emailAddress": {"address": to_addr}}],
-            },
+            "message": message,
             "saveToSentItems": True,
         }
 
-        # --- Send via Graph sendMail (as the shared mailbox) ---
-        url = f"https://graph.microsoft.com/v1.0/users/{quote(from_addr)}/sendMail"
+        # --- Send via Graph sendMail ---
+        url = f"https://graph.microsoft.com/v1.0/users/{quote(sender_mailbox)}/sendMail"
         data = json.dumps(graph_payload).encode("utf-8")
         request = urllib.request.Request(
             url,
@@ -726,7 +757,10 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         with urllib.request.urlopen(request, timeout=30) as resp:
             status = resp.status  # 202 Accepted on success
 
-        logging.info(f"HR email sent (status {status}) to {to_addr} as {from_addr}.")
+        logging.info(
+            f"HR email sent (status {status}) to {to_addr} as {sender_mailbox} "
+            f"(replyTo={user_email or 'none'})."
+        )
         return func.HttpResponse(
             json.dumps({"sent": True, "message": "Your question has been emailed to HR."}),
             status_code=200,

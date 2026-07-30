@@ -25,8 +25,11 @@ Feature spans five systems:
   - Microsoft Entra ID role able to grant app roles (**Privileged Role Administrator** or **Global Administrator**).
   - **Exchange Online** administrator (for the Application Access Policy).
   - **Copilot Studio** maker access to the agent, in the correct environment.
-- ☐ The Function code (`function_app.py`) with the `send_hr_email` route and `canAnswer`
-  flag is **deployed** to the Function App.
+- ☐ The Function code (`function_app.py`) with the `send_hr_email` route, the `canAnswer`
+  flag and `user_email` support is **deployed** to the Function App.
+- ☐ Decide whether the email should be sent from the **shared mailbox with Reply-To set to
+  the employee** (default, recommended) or **from the employee's own mailbox**
+  (`SEND_AS_USER=true`). See Section 5a.
 - ☐ Note these values before starting (you will reuse them):
   - Function App name and resource group.
   - HR destination mailbox (e.g. `OpenEnrollment@panynj.gov`).
@@ -41,6 +44,10 @@ Location: **Azure Portal → Function App → Settings → Environment variables
 - ☐ Add `HR_TO_ADDRESS` = the HR destination mailbox (e.g. `OpenEnrollment@panynj.gov`).
 - ☐ Add `HR_FROM_ADDRESS` = the shared mailbox / service account to send **as**
   (e.g. `benefits-bot@panynj.gov`).
+- ☐ (Optional) Add `SEND_AS_USER` = `true` **only** if the email must originate from the
+  employee's own mailbox instead of the shared mailbox. See Section 5a before enabling —
+  this requires broader `Mail.Send` scope and a security review. Leave unset for the
+  recommended Reply-To behaviour.
 - ☐ (If not already present) `APPLICATIONINSIGHTS_CONNECTION_STRING` = your App Insights
   connection string (so `logging.info`/error traces are visible).
 - ☐ Click **Apply / Save**.
@@ -154,6 +161,37 @@ Test-ApplicationAccessPolicy -Identity someone.else@panynj.gov  -AppId "<applica
 
 ---
 
+## 5a. Who the email comes from (user identity)
+
+The employee's email address is captured from the signed-in Teams user and passed to the
+Function as `user_email`. It is used in two ways:
+
+| Mode | `SEND_AS_USER` | Email is sent from | Reply goes to | Extra permissions |
+|---|---|---|---|---|
+| **Reply-To (default, recommended)** | unset / `false` | the shared mailbox | the **employee** (via `Reply-To`) | none beyond Section 4 |
+| **Send as user** | `true` | the **employee's own mailbox** | the employee | ⚠️ requires widening Section 4 |
+
+- ☐ Decide which mode you need. **Default (Reply-To) is recommended** — HR still replies
+  straight to the employee, with no impersonation risk.
+- ☐ The employee's name and email are also written into the email body for traceability.
+
+> ⚠️ **Before enabling `SEND_AS_USER=true`:** the managed identity must hold `Mail.Send`
+> over each employee's mailbox, which means **widening or removing** the Application Access
+> Policy created in Section 4. That would allow the Function to send email **as any user in
+> scope** — treat this as impersonation capability and obtain a security review first.
+> If `SEND_AS_USER` is on but no `user_email` is supplied, the Function safely falls back to
+> the shared mailbox and logs a warning.
+
+### Requirement: the agent must be authenticated
+`user_email` is only available when the agent knows who the user is.
+
+- ☐ Copilot Studio → **Settings → Security → Authentication** must be set to
+  **Authenticate with Microsoft** (or Teams SSO).
+- ☐ With **No authentication**, `System.User.PrincipalName` is empty, `user_email` arrives
+  blank, and the email falls back to shared-mailbox-only with no Reply-To.
+
+---
+
 ## 6. Azure AI Foundry — add the `NO_ANSWER` instruction
 
 Location: **https://ai.azure.com → project `proj-default` → Agents → PA-Health-Benefit-Agent**.
@@ -211,8 +249,9 @@ Location: **Copilot Studio → your agent → Topics → the topic that calls th
   - ☐ Add a **Condition**: `Topic.EmailHR` **is** `Yes`.
 	- ☐ On **Yes** → **Call an action** → `send_hr_email`, passing:
 	  - `question` → original user message
-	  - `user_full_name` → user profile / `text_3`
+	  - `user_full_name` → user profile / `text_3` (or **System → User.DisplayName**)
 	  - `user_id` → `text_2`
+	  - `user_email` → **System → User.PrincipalName** (requires authentication, Section 5a)
 	  - `conversation_id` → `threadId` from the agent action
 	- ☐ After it returns → **Send a message** with the confirmation (`message`:
 	  "Your question has been emailed to HR.").
@@ -229,22 +268,32 @@ Location: **Copilot Studio → your agent → Topics → the topic that calls th
 - ☐ Ensure Copilot Studio has an action/connector (or Power Automate flow) that POSTs to
   `https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email` including the **function key**
   (`?code=<key>` or an `x-functions-key` header).
+- ☐ The flow must define **five** text inputs and forward them in the JSON body:
+  `question`, `user_full_name`, `user_id`, `conversation_id`, `user_email`.
+- ☐ Use the **built-in HTTP** action (not the *HTTP with Microsoft Entra ID* connector, which
+  restricts calls to a pre-configured `BaseResourceUri` and will return 400).
 
 ---
 
 ## 10. End-to-end testing
 
-- ☐ **Direct function test** (after Sections 1–5):
+- ☐ **Direct function test** (after Sections 1–5a):
 ```powershell
 curl -X POST "https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email?code=<FUNCTION_KEY>" `
   -H "Content-Type: application/json" `
-  -d '{"question":"Can I enroll in the \"Choice Plus\" plan?","user_full_name":"Steven Choy","user_id":"SCHOY","conversation_id":"conv_123"}'
+  -d '{"question":"Can I enroll in the \"Choice Plus\" plan?","user_full_name":"Steven Choy","user_id":"SCHOY","user_email":"steven.choy@panynj.gov","conversation_id":"conv_123"}'
 ```
   - ☐ Expect `{"sent": true, ...}` and the email arriving in the HR mailbox.
+  - ☐ Open the received email and click **Reply** — it must address
+    `user_email` (the employee), not the shared mailbox.
   - ☐ If `502 Authorization_RequestDenied` → Section 3 not propagated / missing.
-  - ☐ If `502 ErrorAccessDenied` on the mailbox → Section 4 policy excludes it.
+  - ☐ If `502 ErrorAccessDenied` on the mailbox → Section 4 policy excludes it
+    (with `SEND_AS_USER=true`, the policy must also cover the employee's mailbox).
 - ☐ **Agent instruction test** (Section 6): ask an off-topic question; confirm function log
   shows `canAnswer=false`.
+- ☐ **User identity test** (Section 5a): in Teams, trigger the email and confirm the function
+  log line `HR email sent (... replyTo=<user email>)` shows a real address, not `none`.
+  If it shows `none`, authentication is not enabled or `user_email` is not being passed.
 - ☐ **Teams end-to-end**: ask an off-topic question → confirm the Yes/No prompt appears →
   choose **Yes** → confirm HR receives the email and the user sees the confirmation.
 - ☐ **Quote test**: ask a question containing `"` → confirm no `Request JSON parse failed`
@@ -267,9 +316,12 @@ curl -X POST "https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email?code=<F
 |---|---|---|
 | `HR_TO_ADDRESS` | Function App settings | HR destination mailbox |
 | `HR_FROM_ADDRESS` | Function App settings | Shared mailbox to send as |
+| `SEND_AS_USER` | Function App settings | Optional; `true` sends from the employee's mailbox (needs wider `Mail.Send`) |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Function App settings | Telemetry/logging |
 | `Mail.Send` (Application) | Microsoft Graph, via PowerShell | Granted to MI object id |
 | Application Access Policy | Exchange Online PowerShell | Restrict MI to the shared mailbox |
 | `NO_ANSWER` instruction | Foundry agent instructions | Deterministic no-answer signal |
 | `canAnswer` handling | Copilot Studio topic | Drives the email offer |
-| `addProperty` body | Power Automate \u2014 agent action HTTP body | JSON-escapes user text |
+| Authentication | Copilot Studio → Settings → Security | Required for `System.User.PrincipalName` |
+| `user_email` input | Power Automate flow + topic | Employee address → Reply-To / sender |
+| `addProperty` body | Power Automate — agent action HTTP body | JSON-escapes user text |
