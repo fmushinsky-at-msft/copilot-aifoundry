@@ -669,11 +669,13 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         "canAnswer": can_answer
         }
 
-        # --- Telemetry: one event per interaction, plus a dedicated event for
-        # unanswered questions so they can be reviewed and improved. ---
+        # --- Telemetry: one event per interaction. The canAnswer dimension
+        # distinguishes answered from unanswered questions. Question text is only
+        # captured when the agent could NOT answer, so it can be reviewed later.
+        # Agent replies are never captured. ---
         _elapsed_ms = int((time.time() - _started) * 1000)
         _params = parameters if isinstance(parameters, dict) else {}
-        _common = {
+        _props = {
             "agentName": agent_name,
             "conversationId": response.conversation.id,
             "userId": _params.get("user_id"),
@@ -681,28 +683,14 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             "canAnswer": can_answer,
             "isNewConversation": not threadid,
         }
+        if not can_answer:
+            _props["question"] = _truncate(message)
 
         track_event(
             "AgentInteraction",
-            properties={
-                **_common,
-                # Question text is always captured so usage can be reviewed.
-                "question": _truncate(message),
-                "answerLength": len(assistant_text),
-            },
+            properties=_props,
             measurements={"durationMs": _elapsed_ms},
         )
-
-        if not can_answer:
-            track_event(
-                "UnansweredQuestion",
-                properties={
-                    **_common,
-                    "question": _truncate(message),
-                    "agentReply": _truncate(assistant_text, 4000),
-                },
-                measurements={"durationMs": _elapsed_ms},
-            )
 
         return func.HttpResponse(
             json.dumps(result, ensure_ascii=False),

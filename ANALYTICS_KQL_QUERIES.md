@@ -7,14 +7,18 @@ interaction and every email send. They land in the **`customEvents`** table.
 
 | Event name | When | Key custom dimensions |
 |---|---|---|
-| `AgentInteraction` | Every call to `agent_httptrigger` | `question`, `canAnswer`, `agentName`, `conversationId`, `userId`, `userName`, `isNewConversation`, `answerLength`, `durationMs` |
-| `UnansweredQuestion` | When the agent could **not** answer | `question`, `agentReply`, plus all of the above |
+| `AgentInteraction` | Every call to `agent_httptrigger` | `canAnswer`, `agentName`, `conversationId`, `userId`, `userName`, `isNewConversation`, `durationMs`, and `question` **only when `canAnswer` is `false`** |
 | `AgentInteractionFailed` | The agent call threw an error | `question`, `error`, `durationMs` |
 | `EmailSent` | HR email delivered successfully | `question`, `userEmail`, `userId`, `userName`, `conversationId`, `hrAddress`, `graphStatus` |
 | `EmailFailed` | HR email failed | `question`, `userEmail`, `errorCode`, `error` |
 
 > Custom dimensions are accessed in KQL as `customDimensions.<name>`.
 > `canAnswer` is stored as the string `"true"` / `"false"`.
+
+### What is deliberately NOT captured
+- **Agent replies are never recorded.**
+- **Question text is only recorded when it could not be answered, or when it was submitted
+  for an email.** Successfully answered questions record no question text.
 
 ---
 
@@ -37,10 +41,10 @@ customEvents
 | where name == "AgentInteraction"
 | where timestamp > ago(24h)
 | project timestamp,
-		  question    = tostring(customDimensions.question),
 		  canAnswer   = tostring(customDimensions.canAnswer),
 		  user        = tostring(customDimensions.userName),
-		  durationMs  = todouble(customDimensions.durationMs)
+		  durationMs  = todouble(customDimensions.durationMs),
+		  question    = tostring(customDimensions.question)  // populated only when unanswered
 | order by timestamp desc
 ```
 
@@ -69,8 +73,9 @@ customEvents
 ### 4. Every question the agent could NOT answer (for review)
 ```kql
 customEvents
-| where name == "UnansweredQuestion"
+| where name == "AgentInteraction"
 | where timestamp > ago(30d)
+| where tostring(customDimensions.canAnswer) == "false"
 | project timestamp,
 		  question = tostring(customDimensions.question),
 		  user     = tostring(customDimensions.userName),
@@ -82,9 +87,11 @@ customEvents
 ### 5. Most frequent unanswered questions (content-gap analysis)
 ```kql
 customEvents
-| where name == "UnansweredQuestion"
+| where name == "AgentInteraction"
 | where timestamp > ago(30d)
+| where tostring(customDimensions.canAnswer) == "false"
 | extend question = tolower(trim(" ", tostring(customDimensions.question)))
+| where isnotempty(question)
 | summarize occurrences = count(), lastAsked = max(timestamp) by question
 | where occurrences > 1
 | order by occurrences desc
@@ -122,7 +129,8 @@ customEvents
 ```kql
 let unanswered = toscalar(
 	customEvents
-	| where name == "UnansweredQuestion" and timestamp > ago(30d)
+	| where name == "AgentInteraction" and timestamp > ago(30d)
+	| where tostring(customDimensions.canAnswer) == "false"
 	| count);
 let emailed = toscalar(
 	customEvents
@@ -218,13 +226,11 @@ traces
 ---
 
 ## Privacy note
-`question` text is captured on **every** interaction, and `userEmail` / `userId` /
-`userName` identify the person asking. Benefits questions can contain personal or health
-related details.
+`question` text is captured **only** when the agent could not answer, when the call failed,
+or when the question was emailed to HR. Answered questions record no question text, and
+**agent replies are never captured**. User identity (`userEmail` / `userId` / `userName`) is
+recorded on interactions.
 
 - ☐ Confirm this retention is acceptable to your privacy/compliance team.
 - ☐ Review the App Insights **data retention** period (default 90 days).
 - ☐ Restrict who can read the Application Insights resource.
-- ☐ If question text should not be stored for answered interactions, the `question` property
-  can be removed from the `AgentInteraction` event while keeping it on
-  `UnansweredQuestion` and `EmailSent`.
