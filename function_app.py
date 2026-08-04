@@ -711,7 +711,9 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             conversation=conversation_id,
             input="",  # Empty since we already added the message to the conversation
             extra_body={
-                "agent": {"type": "agent_reference", "name": agent.name},
+                # The API v1 surface replaced the deprecated "agent" property with
+                # "agent_reference"; sending "agent" now returns 400 invalid_payload.
+                "agent_reference": {"type": "agent_reference", "name": agent.name},
             },
         )
 
