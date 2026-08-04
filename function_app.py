@@ -182,6 +182,9 @@ def extract_token_usage(response):
     return metrics
 
 
+# Basic email-address shape check for caller-supplied recipients.
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+
 # Matches AI Search / Azure OpenAI file-citation markers such as
 # "【371:1†source】" (full-width brackets + dagger) and the ASCII fallbacks
 # "[371:1+source]" / "[371:1†source]". Groups: 1 = doc index, 2 = chunk index.
@@ -834,12 +837,15 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         - question (required): the user's question to forward
         - user_email (required): the employee's email; the message is sent from this
           mailbox so HR sees it as coming directly from them
+        - to_address (required): destination mailbox for the question
         - user_full_name (optional): who is asking
         - user_id (optional): employee id
         - conversation_id (optional): for traceability
 
     Environment variables:
-        - HR_TO_ADDRESS (required): destination HR mailbox
+        - HR_ALLOWED_RECIPIENTS (optional): comma/semicolon separated allow-list of
+          addresses or domains that 'to_address' may target. Strongly recommended,
+          otherwise any caller with the function key can pick any recipient.
     """
     logging.info("send_hr_email trigger invoked.")
 
@@ -848,6 +854,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
     user_full_name = req.params.get("user_full_name")
     user_id = req.params.get("user_id")
     user_email = req.params.get("user_email")
+    to_address = req.params.get("to_address")
     conversation_id = req.params.get("conversation_id")
 
     if not question:
@@ -885,6 +892,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             user_full_name = body.get("user_full_name")
             user_id = body.get("user_id")
             user_email = body.get("user_email")
+            to_address = body.get("to_address")
             conversation_id = body.get("conversation_id")
         elif body is not None:
             logging.warning(f"send_hr_email: unexpected body type {type(body).__name__}.")
@@ -905,13 +913,43 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    to_addr = os.environ.get("HR_TO_ADDRESS")
+    to_addr = (to_address or "").strip()
     if not to_addr:
-        logging.error("HR_TO_ADDRESS must be set.")
+        logging.warning("send_hr_email: returning 400 - no 'to_address' supplied.")
         return func.HttpResponse(
-            json.dumps({"error": "Server configuration error: HR mailbox not configured."}),
-            status_code=500,
+            json.dumps({"error": "Missing required parameter 'to_address'"}),
+            status_code=400,
             mimetype="application/json",
+        )
+
+    # Basic shape check so malformed input fails fast rather than at Graph.
+    if not EMAIL_RE.match(to_addr):
+        logging.warning("send_hr_email: returning 400 - 'to_address' is not a valid email address.")
+        return func.HttpResponse(
+            json.dumps({"error": "Parameter 'to_address' is not a valid email address"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    # Optional allow-list. Because the recipient now comes from the request, this
+    # prevents the endpoint being used to mail arbitrary addresses. Entries may be
+    # full addresses ("hr@panynj.gov") or domains ("@panynj.gov" / "panynj.gov").
+    allowed_raw = os.environ.get("HR_ALLOWED_RECIPIENTS", "").strip()
+    if allowed_raw:
+        allowed = [a.strip().lower().lstrip("@") for a in re.split(r"[;,]", allowed_raw) if a.strip()]
+        target = to_addr.lower()
+        target_domain = target.split("@", 1)[-1]
+        if target not in allowed and target_domain not in allowed:
+            logging.warning(f"send_hr_email: recipient '{to_addr}' is not in HR_ALLOWED_RECIPIENTS.")
+            return func.HttpResponse(
+                json.dumps({"error": "Recipient address is not permitted"}),
+                status_code=403,
+                mimetype="application/json",
+            )
+    else:
+        logging.warning(
+            "HR_ALLOWED_RECIPIENTS is not set; 'to_address' is unrestricted. "
+            "Set it to limit which recipients this endpoint may email."
         )
 
     try:

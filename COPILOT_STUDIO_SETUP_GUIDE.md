@@ -179,23 +179,25 @@ Creating it from Copilot Studio automatically makes it available to your agent.
 (older label: *"When Power Virtual Agents calls a flow"*) and a second box
 **"Respond to the agent"**.
 
-### Step 1.2 — Add the four inputs
+### Step 1.2 — Add the six inputs
 These are the values the agent passes in.
 
 1. Click the first box, **When an agent calls the flow**.
 2. In the panel that opens, click **+ Add an input**.
 3. Choose the type **Text**.
 4. A field appears with a placeholder name. Replace it by typing exactly: `question`
-5. Repeat three more times, always choosing **Text**:
+5. Repeat five more times, always choosing **Text**:
    - `user_full_name`
    - `user_id`
    - `conversation_id`
+   - `user_email`
+   - `to_address`
 
 > Type the names **exactly** as shown (lower case, underscores). They must match what the
 > Azure Function expects.
 
-✅ **Checkpoint:** the trigger box lists four text inputs in this order:
-`question`, `user_full_name`, `user_id`, `conversation_id`.
+✅ **Checkpoint:** the trigger box lists six text inputs in this order:
+`question`, `user_full_name`, `user_id`, `conversation_id`, `user_email`, `to_address`.
 
 ### Step 1.3 — Add the HTTP action that calls Azure
 1. Hover over the **arrow** below the trigger box; a **+** circle appears. Click it.
@@ -215,7 +217,9 @@ These are the values the agent passes in.
   "question": "@{triggerBody()?['text']}",
   "user_full_name": "@{triggerBody()?['text_1']}",
   "user_id": "@{triggerBody()?['text_2']}",
-  "conversation_id": "@{triggerBody()?['text_3']}"
+  "conversation_id": "@{triggerBody()?['text_3']}",
+  "user_email": "@{triggerBody()?['text_4']}",
+  "to_address": "@{triggerBody()?['text_5']}"
 }
 ```
 
@@ -271,11 +275,13 @@ Testing now means that if something breaks later, you know it is *not* the flow.
 
 1. In the Power Automate designer, click **Test** (top-right).
 2. Choose **Manually** → **Test**.
-3. Power Automate asks for the four inputs. Type sample values:
+3. Power Automate asks for the inputs. Type sample values:
    - `question` → `Test from Power Automate`
    - `user_full_name` → `Test User`
    - `user_id` → `TEST01`
    - `conversation_id` → `test-001`
+   - `user_email` → your own work email
+   - `to_address` → the HR mailbox (e.g. `OpenEnrollment@panynj.gov`)
 4. Click **Run flow** → **Done**.
 5. Watch the run. Every step should show a **green tick**.
 6. Click the **HTTP** step and check **Outputs** → **Status code** should be **200**, and the
@@ -403,6 +409,7 @@ Copilot Studio automatically creates a branch for each option.
 | `user_full_name` | the user's display name | see note below |
 | `user_id` | the user's employee id | see note below |
 | `conversation_id` | the agent action's **threadId** output | returned by Flow A |
+| `to_address` | the HR mailbox, e.g. `OpenEnrollment@panynj.gov` | type it directly, or use a topic variable |
 
 > **Where do `user_full_name` and `user_id` come from?**
 > These are the same two values your existing **Flow A** already sends to Azure as

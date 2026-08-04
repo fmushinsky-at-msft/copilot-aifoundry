@@ -21,7 +21,7 @@
 #   ./setup-email-hr.ps1 `
 #       -FunctionAppName "myfunc" `
 #       -ResourceGroup "myrg" `
-#       -HrToAddress "OpenEnrollment@panynj.gov" `
+#       -AllowedRecipients "OpenEnrollment@panynj.gov" `
 #       -AssistantUsersGroup "benefits-assistant-users@panynj.gov" `
 #       -TestMailbox "steven.choy@panynj.gov"
 # =============================================================================
@@ -29,7 +29,7 @@
 param(
 	[Parameter(Mandatory = $true)] [string] $FunctionAppName,
 	[Parameter(Mandatory = $true)] [string] $ResourceGroup,
-	[Parameter(Mandatory = $true)] [string] $HrToAddress,
+	[Parameter(Mandatory = $true)] [string] $AllowedRecipients,
 	[Parameter(Mandatory = $true)] [string] $AssistantUsersGroup,
 	[string] $TestMailbox = "",
 	[string] $AppInsightsConnectionString = "",
@@ -53,7 +53,7 @@ if (-not $SkipFunctionSettings) {
 	Write-Section "Section 1: Function App settings"
 
 	$settings = @(
-		"HR_TO_ADDRESS=$HrToAddress"
+		"HR_ALLOWED_RECIPIENTS=$AllowedRecipients"
 	)
 	if ($AppInsightsConnectionString -ne "") {
 		$settings += "APPLICATIONINSIGHTS_CONNECTION_STRING=$AppInsightsConnectionString"

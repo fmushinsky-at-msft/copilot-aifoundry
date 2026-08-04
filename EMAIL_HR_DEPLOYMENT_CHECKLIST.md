@@ -40,7 +40,10 @@ Feature spans five systems:
 
 Location: **Azure Portal → Function App → Settings → Environment variables** (Application settings tab).
 
-- ☐ Add `HR_TO_ADDRESS` = the HR destination mailbox (e.g. `OpenEnrollment@panynj.gov`).
+- ☐ (Recommended) Add `HR_ALLOWED_RECIPIENTS` = comma/semicolon separated list of addresses
+  or domains the caller may email, e.g. `OpenEnrollment@panynj.gov;benefits@panynj.gov`
+  or just `panynj.gov`. Without it, any caller holding the function key can direct email to
+  **any** address from the employee's mailbox.
 - ☐ (If not already present) `APPLICATIONINSIGHTS_CONNECTION_STRING` = your App Insights
   connection string (so `logging.info`/error traces are visible).
 - ☐ Click **Apply / Save**.
@@ -52,7 +55,7 @@ az functionapp config appsettings set `
   --name "<FUNCTION_APP_NAME>" `
   --resource-group "<RESOURCE_GROUP>" `
   --settings `
-	"HR_TO_ADDRESS=OpenEnrollment@panynj.gov"
+	"HR_ALLOWED_RECIPIENTS=OpenEnrollment@panynj.gov"
 ```
 
 ---
@@ -155,7 +158,8 @@ The email is always sent **from the signed-in employee's own mailbox**, using th
 
 - ☐ Confirm each assistant user has a **licensed Exchange Online mailbox**.
 - ☐ Confirm those mailboxes are members of the group scoped in Section 4.
-- ☐ Confirm HR (`HR_TO_ADDRESS`) can receive mail from internal users.
+- ☐ Confirm the destination HR mailbox (passed as `to_address`) can receive mail from
+  internal users.
 - ☐ The employee's name and email are also written into the email body for traceability.
 - ☐ A copy is saved to the employee's **Sent Items** (`saveToSentItems: true`).
 
@@ -230,6 +234,7 @@ Location: **Copilot Studio → your agent → Topics → the topic that calls th
 	  - `user_id` → `text_2`
 	  - `user_email` → **System → User.PrincipalName** (required; see Section 5)
 	  - `conversation_id` → `threadId` from the agent action
+	  - `to_address` → the HR mailbox (literal value or a topic variable)
 	- ☐ After it returns → **Send a message** with the confirmation (`message`:
 	  "Your question has been emailed to HR.").
 	- ☐ On **No** → send a courteous closing message.
@@ -245,8 +250,8 @@ Location: **Copilot Studio → your agent → Topics → the topic that calls th
 - ☐ Ensure Copilot Studio has an action/connector (or Power Automate flow) that POSTs to
   `https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email` including the **function key**
   (`?code=<key>` or an `x-functions-key` header).
-- ☐ The flow must define **five** text inputs and forward them in the JSON body:
-  `question`, `user_full_name`, `user_id`, `conversation_id`, `user_email`.
+- ☐ The flow must define **six** text inputs and forward them in the JSON body:
+  `question`, `user_full_name`, `user_id`, `conversation_id`, `user_email`, `to_address`.
 - ☐ Use the **built-in HTTP** action (not the *HTTP with Microsoft Entra ID* connector, which
   restricts calls to a pre-configured `BaseResourceUri` and will return 400).
 
@@ -258,7 +263,7 @@ Location: **Copilot Studio → your agent → Topics → the topic that calls th
 ```powershell
 curl -X POST "https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email?code=<FUNCTION_KEY>" `
   -H "Content-Type: application/json" `
-  -d '{"question":"Can I enroll in the \"Choice Plus\" plan?","user_full_name":"Steven Choy","user_id":"SCHOY","user_email":"steven.choy@panynj.gov","conversation_id":"conv_123"}'
+  -d '{"question":"Can I enroll in the \"Choice Plus\" plan?","user_full_name":"Steven Choy","user_id":"SCHOY","user_email":"steven.choy@panynj.gov","to_address":"OpenEnrollment@panynj.gov","conversation_id":"conv_123"}'
 ```
   - ☐ Expect `{"sent": true, ...}` and the email arriving in the HR mailbox.
   - ☐ Confirm the received email's **From** address is the employee (`user_email`), and a
@@ -292,7 +297,8 @@ curl -X POST "https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email?code=<F
 
 | Setting | Where | Value / Notes |
 |---|---|---|
-| `HR_TO_ADDRESS` | Function App settings | HR destination mailbox |
+| `HR_ALLOWED_RECIPIENTS` | Function App settings | Optional allow-list restricting `to_address` |
+| `to_address` input | Power Automate flow + topic | Destination HR mailbox, supplied per request |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Function App settings | Telemetry/logging |
 | `Mail.Send` (Application) | Microsoft Graph, via PowerShell | Granted to MI object id |
 | Application Access Policy | Exchange Online PowerShell | Scope MI to the assistant's user mailboxes |
