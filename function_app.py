@@ -1,18 +1,14 @@
 import azure.functions as func
 import logging
-from agent_framework.azure import AzureAIClient
-from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
 from azure.identity import DefaultAzureCredential
 import os
 import json
-import asyncio
 import re
 import time
 import threading
 import urllib.request
 import urllib.error
 from urllib.parse import quote
-from pathlib import Path
 from azure.ai.projects import AIProjectClient
 
 # ---------------------------------------------------------------------------
