@@ -92,6 +92,62 @@ def _truncate(text, limit=8000):
     return text if len(text) <= limit else text[:limit] + "...[truncated]"
 
 
+def extract_token_usage(response):
+    """Pull token counts out of a Responses API result.
+
+    Returns a dict of numeric measurements suitable for App Insights. Shapes vary
+    between API versions, so every field is probed defensively and missing values
+    are simply omitted.
+    """
+    usage = getattr(response, "usage", None)
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage")
+    if usage is None:
+        return {}
+
+    def _num(obj, *names):
+        for name in names:
+            value = obj.get(name) if isinstance(obj, dict) else getattr(obj, name, None)
+            if isinstance(value, (int, float)):
+                return value
+        return None
+
+    metrics = {}
+    # Responses API uses input/output; Chat Completions uses prompt/completion.
+    input_tokens = _num(usage, "input_tokens", "prompt_tokens")
+    output_tokens = _num(usage, "output_tokens", "completion_tokens")
+    total_tokens = _num(usage, "total_tokens")
+
+    if input_tokens is not None:
+        metrics["inputTokens"] = input_tokens
+    if output_tokens is not None:
+        metrics["outputTokens"] = output_tokens
+    if total_tokens is not None:
+        metrics["totalTokens"] = total_tokens
+    elif input_tokens is not None and output_tokens is not None:
+        metrics["totalTokens"] = input_tokens + output_tokens
+
+    # Reasoning models report the thinking tokens separately (billed as output).
+    out_details = getattr(usage, "output_tokens_details", None)
+    if out_details is None and isinstance(usage, dict):
+        out_details = usage.get("output_tokens_details")
+    if out_details is not None:
+        reasoning = _num(out_details, "reasoning_tokens")
+        if reasoning is not None:
+            metrics["reasoningTokens"] = reasoning
+
+    # Cached input tokens are billed at a lower rate; useful for cost analysis.
+    in_details = getattr(usage, "input_tokens_details", None)
+    if in_details is None and isinstance(usage, dict):
+        in_details = usage.get("input_tokens_details")
+    if in_details is not None:
+        cached = _num(in_details, "cached_tokens")
+        if cached is not None:
+            metrics["cachedInputTokens"] = cached
+
+    return metrics
+
+
 # Matches AI Search / Azure OpenAI file-citation markers such as
 # "【371:1†source】" (full-width brackets + dagger) and the ASCII fallbacks
 # "[371:1+source]" / "[371:1†source]". Groups: 1 = doc index, 2 = chunk index.
@@ -686,10 +742,20 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         if not can_answer:
             _props["question"] = _truncate(message)
 
+        # Token usage reported by the model for this turn (input/output/total,
+        # plus reasoning and cached-input counts when the model provides them).
+        _measurements = {"durationMs": _elapsed_ms}
+        _usage = extract_token_usage(response)
+        _measurements.update(_usage)
+        if _usage:
+            logging.info(f"Token usage: {_usage}")
+        else:
+            logging.info("Token usage not reported by the API for this response.")
+
         track_event(
             "AgentInteraction",
             properties=_props,
-            measurements={"durationMs": _elapsed_ms},
+            measurements=_measurements,
         )
 
         return func.HttpResponse(

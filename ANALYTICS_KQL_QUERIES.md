@@ -7,7 +7,7 @@ interaction and every email send. They land in the **`customEvents`** table.
 
 | Event name | When | Key custom dimensions |
 |---|---|---|
-| `AgentInteraction` | Every call to `agent_httptrigger` | `canAnswer`, `agentName`, `conversationId`, `userId`, `userName`, `isNewConversation`, `durationMs`, and `question` **only when `canAnswer` is `false`** |
+| `AgentInteraction` | Every call to `agent_httptrigger` | `canAnswer`, `agentName`, `conversationId`, `userId`, `userName`, `isNewConversation`, `durationMs`, token counts (`inputTokens`, `outputTokens`, `totalTokens`, `reasoningTokens`, `cachedInputTokens`), and `question` **only when `canAnswer` is `false`** |
 | `AgentInteractionFailed` | The agent call threw an error | `question`, `error`, `durationMs` |
 | `EmailSent` | HR email delivered successfully | `question`, `userEmail`, `userId`, `userName`, `conversationId`, `hrAddress`, `graphStatus` |
 | `EmailFailed` | HR email failed | `question`, `userEmail`, `errorCode`, `error` |
@@ -208,6 +208,114 @@ customEvents
 		  question = tostring(customDimensions.question),
 		  error    = tostring(customDimensions.error)
 | order by timestamp desc
+```
+
+---
+
+## Token consumption
+
+Token counts are emitted as **measurements** on `AgentInteraction`. Depending on the
+App Insights schema they surface either in `customMeasurements` or `customDimensions`, so
+these queries read `customMeasurements` first and fall back to `customDimensions`.
+
+### Tokens per interaction
+```kql
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(24h)
+| extend inTok  = todouble(coalesce(customMeasurements.inputTokens,  customDimensions.inputTokens)),
+		 outTok = todouble(coalesce(customMeasurements.outputTokens, customDimensions.outputTokens)),
+		 total  = todouble(coalesce(customMeasurements.totalTokens,  customDimensions.totalTokens))
+| project timestamp,
+		  user = tostring(customDimensions.userName),
+		  canAnswer = tostring(customDimensions.canAnswer),
+		  inTok, outTok, total
+| order by timestamp desc
+```
+
+### Daily token totals (cost tracking)
+```kql
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(30d)
+| extend inTok  = todouble(coalesce(customMeasurements.inputTokens,  customDimensions.inputTokens)),
+		 outTok = todouble(coalesce(customMeasurements.outputTokens, customDimensions.outputTokens))
+| summarize interactions = count(),
+			inputTokens  = sum(inTok),
+			outputTokens = sum(outTok),
+			totalTokens  = sum(inTok) + sum(outTok)
+	by bin(timestamp, 1d)
+| order by timestamp asc
+```
+
+### Estimated cost per day
+Replace the two rates with your model's actual price per 1K tokens.
+```kql
+let inputRatePer1K  = 0.00015;   // <-- set to your model's input price
+let outputRatePer1K = 0.00060;   // <-- set to your model's output price
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(30d)
+| extend inTok  = todouble(coalesce(customMeasurements.inputTokens,  customDimensions.inputTokens)),
+		 outTok = todouble(coalesce(customMeasurements.outputTokens, customDimensions.outputTokens))
+| summarize inputTokens = sum(inTok), outputTokens = sum(outTok)
+	by bin(timestamp, 1d)
+| extend estimatedCost = round(inputTokens / 1000 * inputRatePer1K
+							 + outputTokens / 1000 * outputRatePer1K, 4)
+| order by timestamp asc
+```
+
+### Token usage per user (who is driving spend)
+```kql
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(30d)
+| extend total = todouble(coalesce(customMeasurements.totalTokens, customDimensions.totalTokens))
+| summarize interactions = count(),
+			totalTokens = sum(total),
+			avgTokens   = round(avg(total), 0)
+	by user = tostring(customDimensions.userName)
+| order by totalTokens desc
+```
+
+### Most expensive interactions
+```kql
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(7d)
+| extend total = todouble(coalesce(customMeasurements.totalTokens, customDimensions.totalTokens))
+| top 25 by total desc
+| project timestamp, total,
+		  canAnswer = tostring(customDimensions.canAnswer),
+		  user = tostring(customDimensions.userName),
+		  question = tostring(customDimensions.question)
+```
+
+### Reasoning-token overhead
+Shows how much of the output is model "thinking" — useful when tuning reasoning effort.
+```kql
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(7d)
+| extend outTok    = todouble(coalesce(customMeasurements.outputTokens,    customDimensions.outputTokens)),
+		 reasoning = todouble(coalesce(customMeasurements.reasoningTokens, customDimensions.reasoningTokens))
+| where isnotnull(reasoning)
+| summarize outputTokens = sum(outTok), reasoningTokens = sum(reasoning)
+	by bin(timestamp, 1d)
+| extend reasoningSharePct = round(100.0 * reasoningTokens / outputTokens, 1)
+| order by timestamp asc
+```
+
+### Do unanswered questions cost more?
+```kql
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(30d)
+| extend total = todouble(coalesce(customMeasurements.totalTokens, customDimensions.totalTokens))
+| summarize interactions = count(),
+			avgTokens = round(avg(total), 0),
+			totalTokens = sum(total)
+	by canAnswer = tostring(customDimensions.canAnswer)
 ```
 
 ---
