@@ -7,11 +7,90 @@ import os
 import json
 import asyncio
 import re
+import time
 import urllib.request
 import urllib.error
 from urllib.parse import quote
 from pathlib import Path
 from azure.ai.projects import AIProjectClient
+
+# ---------------------------------------------------------------------------
+# Application Insights custom events
+#
+# Events are written to the App Insights "customEvents" table so usage can be
+# queried and filtered with KQL. Requires APPLICATIONINSIGHTS_CONNECTION_STRING.
+# If the exporter package is unavailable the calls degrade to structured logs
+# (traces table) so telemetry never breaks the request.
+# ---------------------------------------------------------------------------
+_event_logger = None
+_event_logger_ready = False
+
+
+def _get_event_logger():
+    """Lazily build a logger that exports to the App Insights customEvents table."""
+    global _event_logger, _event_logger_ready
+    if _event_logger_ready:
+        return _event_logger
+
+    _event_logger_ready = True
+    conn = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")
+    if not conn:
+        logging.warning("APPLICATIONINSIGHTS_CONNECTION_STRING not set; custom events go to traces only.")
+        return None
+    try:
+        from opencensus.ext.azure.log_exporter import AzureEventHandler
+
+        lg = logging.getLogger("agent_events")
+        lg.setLevel(logging.INFO)
+        lg.propagate = False
+        if not lg.handlers:
+            lg.addHandler(AzureEventHandler(connection_string=conn))
+        _event_logger = lg
+    except Exception as exporter_err:
+        logging.warning(f"Custom event exporter unavailable ({exporter_err}); falling back to traces.")
+        _event_logger = None
+    return _event_logger
+
+
+def _clean_dimensions(properties):
+    """App Insights custom dimensions must be simple scalars; stringify safely."""
+    cleaned = {}
+    for key, value in (properties or {}).items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            cleaned[key] = "true" if value else "false"
+        elif isinstance(value, (int, float, str)):
+            cleaned[key] = value
+        else:
+            cleaned[key] = str(value)
+    return cleaned
+
+
+def track_event(name, properties=None, measurements=None):
+    """Emit a custom event to App Insights. Never raises."""
+    try:
+        dims = _clean_dimensions(properties)
+        if measurements:
+            dims.update({k: v for k, v in measurements.items() if isinstance(v, (int, float))})
+
+        lg = _get_event_logger()
+        if lg is not None:
+            lg.info(name, extra={"custom_dimensions": dims})
+        else:
+            # Fallback: structured trace so the data is still queryable.
+            logging.info(f"EVENT {name} {json.dumps(dims, ensure_ascii=False, default=str)}")
+    except Exception as track_err:  # telemetry must never break the request
+        logging.warning(f"track_event failed for '{name}': {track_err}")
+
+
+def _truncate(text, limit=8000):
+    """App Insights caps custom dimension values; keep them within range."""
+    if text is None:
+        return None
+    text = str(text)
+    return text if len(text) <= limit else text[:limit] + "...[truncated]"
+
 
 # Matches AI Search / Azure OpenAI file-citation markers such as
 # "【371:1†source】" (full-width brackets + dagger) and the ASCII fallbacks
@@ -354,6 +433,7 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         - AGENT_ID: Specific agent ID to use (overrides PERSIST_AGENT)
     """
     logging.info('Python HTTP trigger function processed a request.')
+    _started = time.time()
 
     message = req.params.get('message')
     agent_name = req.params.get('agent_name')
@@ -589,6 +669,40 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         "canAnswer": can_answer
         }
 
+        # --- Telemetry: one event per interaction, plus a dedicated event for
+        # unanswered questions so they can be reviewed and improved. ---
+        _elapsed_ms = int((time.time() - _started) * 1000)
+        _params = parameters if isinstance(parameters, dict) else {}
+        _common = {
+            "agentName": agent_name,
+            "conversationId": response.conversation.id,
+            "userId": _params.get("user_id"),
+            "userName": _params.get("user_full_name"),
+            "canAnswer": can_answer,
+            "isNewConversation": not threadid,
+        }
+
+        track_event(
+            "AgentInteraction",
+            properties={
+                **_common,
+                # Question text is always captured so usage can be reviewed.
+                "question": _truncate(message),
+                "answerLength": len(assistant_text),
+            },
+            measurements={"durationMs": _elapsed_ms},
+        )
+
+        if not can_answer:
+            track_event(
+                "UnansweredQuestion",
+                properties={
+                    **_common,
+                    "question": _truncate(message),
+                    "agentReply": _truncate(assistant_text, 4000),
+                },
+                measurements={"durationMs": _elapsed_ms},
+            )
 
         return func.HttpResponse(
             json.dumps(result, ensure_ascii=False),
@@ -600,6 +714,15 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"An error occurred: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
+        track_event(
+            "AgentInteractionFailed",
+            properties={
+                "agentName": agent_name,
+                "question": _truncate(message),
+                "error": _truncate(str(e), 2000),
+            },
+            measurements={"durationMs": int((time.time() - _started) * 1000)},
+        )
         return func.HttpResponse(
             json.dumps({"error": str(e)}),
             status_code=500,
@@ -746,6 +869,18 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             status = resp.status  # 202 Accepted on success
 
         logging.info(f"HR email sent (status {status}) to {to_addr} as {sender_mailbox}.")
+        track_event(
+            "EmailSent",
+            properties={
+                "question": _truncate(question),
+                "userEmail": user_email,
+                "userId": user_id,
+                "userName": user_full_name,
+                "conversationId": conversation_id,
+                "hrAddress": to_addr,
+                "graphStatus": status,
+            },
+        )
         return func.HttpResponse(
             json.dumps({"sent": True, "message": "Your question has been emailed to HR."}),
             status_code=200,
@@ -758,6 +893,18 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         except Exception:
             pass
         logging.error(f"Graph sendMail failed: {http_err.code} {detail}")
+        track_event(
+            "EmailFailed",
+            properties={
+                "question": _truncate(question),
+                "userEmail": user_email,
+                "userId": user_id,
+                "conversationId": conversation_id,
+                "hrAddress": to_addr,
+                "errorCode": http_err.code,
+                "error": _truncate(detail, 2000),
+            },
+        )
         return func.HttpResponse(
             json.dumps({"sent": False, "error": f"Graph error {http_err.code}", "detail": detail}),
             status_code=502,
@@ -767,6 +914,16 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"send_hr_email error: {str(e)}")
         import traceback
         logging.error(traceback.format_exc())
+        track_event(
+            "EmailFailed",
+            properties={
+                "question": _truncate(question),
+                "userEmail": user_email,
+                "userId": user_id,
+                "conversationId": conversation_id,
+                "error": _truncate(str(e), 2000),
+            },
+        )
         return func.HttpResponse(
             json.dumps({"sent": False, "error": str(e)}),
             status_code=500,
