@@ -37,6 +37,49 @@ function Write-Section($text) {
 	Write-Host "==== $text ====" -ForegroundColor Cyan
 }
 
+# The Azure CLI writes warnings (e.g. the 32-bit Python cryptography notice) to
+# stderr. With $ErrorActionPreference = 'Stop', PowerShell turns that into a
+# terminating NativeCommandError even though the command succeeded. This helper
+# runs az with stderr tolerated, then decides success from the exit code.
+function Invoke-Az {
+	param(
+		[Parameter(Mandatory = $true)][string[]] $Arguments,
+		[switch] $AllowFailure
+	)
+
+	$previous = $ErrorActionPreference
+	$ErrorActionPreference = "Continue"
+	try {
+		# --only-show-errors suppresses informational/warning chatter.
+		$argList = @($Arguments) + @("--only-show-errors")
+		$output = & az @argList 2>&1
+		$exit = $LASTEXITCODE
+
+		# Separate real output from stderr records so warnings do not pollute it.
+		$stdout = @()
+		foreach ($line in $output) {
+			if ($line -is [System.Management.Automation.ErrorRecord]) {
+				$text = $line.ToString()
+				if ($text -match 'UserWarning|WARNING|is deprecated|32-bit') {
+					continue   # benign CLI noise
+				}
+				Write-Host $text -ForegroundColor DarkYellow
+			}
+			else {
+				$stdout += $line
+			}
+		}
+
+		if ($exit -ne 0 -and -not $AllowFailure) {
+			throw "Azure CLI command failed (exit $exit): az $($Arguments -join ' ')"
+		}
+		return ($stdout -join "`n")
+	}
+	finally {
+		$ErrorActionPreference = $previous
+	}
+}
+
 # Files the Functions host actually needs at the archive ROOT.
 # Add any new source folders/files here (e.g. "shared").
 $Include = @(
@@ -127,7 +170,7 @@ if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
 	throw "Azure CLI not found. Install it from https://aka.ms/installazurecli then run 'az login'."
 }
 
-$account = az account show 2>$null
+$account = Invoke-Az @("account", "show", "-o", "json") -AllowFailure
 if (-not $account) {
 	throw "Not signed in to Azure. Run 'az login' (and 'az account set --subscription <id>') then retry."
 }
@@ -136,9 +179,9 @@ Write-Host "Subscription: $($sub.name) [$($sub.id)]"
 
 Write-Section "Inspecting the Function App"
 
-$appJson = az functionapp show -n $FunctionAppName -g $ResourceGroup -o json 2>$null
+$appJson = Invoke-Az @("functionapp", "show", "-n", $FunctionAppName, "-g", $ResourceGroup, "-o", "json") -AllowFailure
 if (-not $appJson) {
-	throw "Function App '$FunctionAppName' not found in resource group '$ResourceGroup'."
+	throw "Function App '$FunctionAppName' not found in resource group '$ResourceGroup' (or you lack access)."
 }
 $app = $appJson | ConvertFrom-Json
 Write-Host "Name    : $($app.name)"
@@ -149,14 +192,13 @@ if ($app.functionAppConfig -and $app.functionAppConfig.runtime) {
 
 Write-Section "Deploying $ZipPath"
 
-az functionapp deployment source config-zip `
-	-g $ResourceGroup `
-	-n $FunctionAppName `
-	--src (Join-Path $projectRoot $ZipPath)
+Invoke-Az @(
+	"functionapp", "deployment", "source", "config-zip",
+	"-g", $ResourceGroup,
+	"-n", $FunctionAppName,
+	"--src", (Join-Path $projectRoot $ZipPath)
+) | Out-Host
 
-if ($LASTEXITCODE -ne 0) {
-	throw "Deployment failed. See the Azure CLI output above."
-}
 Write-Host "Deployment submitted." -ForegroundColor Green
 
 # -----------------------------------------------------------------------------
@@ -168,7 +210,7 @@ if ($Verify) {
 	Start-Sleep -Seconds 60
 
 	Write-Section "Registered functions"
-	az functionapp function list -g $ResourceGroup -n $FunctionAppName -o table
+	Invoke-Az @("functionapp", "function", "list", "-g", $ResourceGroup, "-n", $FunctionAppName, "-o", "table") -AllowFailure | Out-Host
 
 	Write-Host ""
 	Write-Host "If the list is empty, the package deployed but function_app.py failed to import." -ForegroundColor Yellow
