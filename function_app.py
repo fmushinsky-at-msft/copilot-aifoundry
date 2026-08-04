@@ -8,6 +8,7 @@ import json
 import asyncio
 import re
 import time
+import threading
 import urllib.request
 import urllib.error
 from urllib.parse import quote
@@ -23,33 +24,64 @@ from azure.ai.projects import AIProjectClient
 # (traces table) so telemetry never breaks the request.
 # ---------------------------------------------------------------------------
 _event_logger = None
+_event_handler = None
 _event_logger_ready = False
+_event_logger_lock = threading.Lock()
 
 
 def _get_event_logger():
     """Lazily build a logger that exports to the App Insights customEvents table."""
-    global _event_logger, _event_logger_ready
+    global _event_logger, _event_handler, _event_logger_ready
+
     if _event_logger_ready:
         return _event_logger
 
-    _event_logger_ready = True
-    conn = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")
-    if not conn:
-        logging.warning("APPLICATIONINSIGHTS_CONNECTION_STRING not set; custom events go to traces only.")
-        return None
-    try:
-        from opencensus.ext.azure.log_exporter import AzureEventHandler
+    # Functions can run invocations concurrently in one worker; build once.
+    with _event_logger_lock:
+        if _event_logger_ready:
+            return _event_logger
 
-        lg = logging.getLogger("agent_events")
-        lg.setLevel(logging.INFO)
-        lg.propagate = False
-        if not lg.handlers:
-            lg.addHandler(AzureEventHandler(connection_string=conn))
-        _event_logger = lg
-    except Exception as exporter_err:
-        logging.warning(f"Custom event exporter unavailable ({exporter_err}); falling back to traces.")
-        _event_logger = None
+        conn = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")
+        if not conn:
+            logging.warning("APPLICATIONINSIGHTS_CONNECTION_STRING not set; custom events go to traces only.")
+            _event_logger_ready = True
+            return None
+        try:
+            from opencensus.ext.azure.log_exporter import AzureEventHandler
+
+            lg = logging.getLogger("agent_events")
+            lg.setLevel(logging.INFO)
+            lg.propagate = False
+            if not lg.handlers:
+                # Short export interval: Functions workers can be frozen shortly
+                # after an invocation, so do not let events sit in the buffer.
+                handler = AzureEventHandler(connection_string=conn, export_interval=2.0)
+                lg.addHandler(handler)
+                _event_handler = handler
+            else:
+                _event_handler = lg.handlers[0]
+            _event_logger = lg
+        except Exception as exporter_err:
+            logging.warning(f"Custom event exporter unavailable ({exporter_err}); falling back to traces.")
+            _event_logger = None
+        finally:
+            _event_logger_ready = True
+
     return _event_logger
+
+
+def flush_events():
+    """Force pending custom events to be sent.
+
+    Azure Functions may freeze or recycle the worker as soon as a request
+    completes, which would silently drop buffered telemetry. Call this before
+    returning from a request. Never raises.
+    """
+    try:
+        if _event_handler is not None:
+            _event_handler.flush()
+    except Exception as flush_err:
+        logging.warning(f"flush_events failed: {flush_err}")
 
 
 def _clean_dimensions(properties):
@@ -68,7 +100,7 @@ def _clean_dimensions(properties):
 
 
 def track_event(name, properties=None, measurements=None):
-    """Emit a custom event to App Insights. Never raises."""
+    """Emit a custom event to App Insights and flush it. Never raises."""
     try:
         dims = _clean_dimensions(properties)
         if measurements:
@@ -77,6 +109,8 @@ def track_event(name, properties=None, measurements=None):
         lg = _get_event_logger()
         if lg is not None:
             lg.info(name, extra={"custom_dimensions": dims})
+            # Flush immediately so the event survives worker freeze/recycle.
+            flush_events()
         else:
             # Fallback: structured trace so the data is still queryable.
             logging.info(f"EVENT {name} {json.dumps(dims, ensure_ascii=False, default=str)}")
@@ -510,9 +544,11 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             except Exception:
                 pass
             logging.warning(
-                "Request JSON parse failed (likely unescaped characters in the "
-                f"body). Raw body (truncated): {raw[:1000]}"
+                "Request JSON parse failed (likely unescaped characters in the body). "
+                "Set DEBUG_RAW_RESPONSE=true to log the raw payload."
             )
+            if os.environ.get("DEBUG_RAW_RESPONSE", "").lower() in ("1", "true", "yes"):
+                logging.warning(f"Raw body (truncated): {raw[:1000]}")
             # Lenient re-parse attempt: try to recover common escaping problems
             # (bare newlines/tabs and unescaped inner double quotes).
             if raw:
@@ -680,17 +716,22 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             },
         )
 
-        # --- Diagnostic: dump the full response so we can locate citation/source data ---
-        try:
-            if hasattr(response, "model_dump_json"):
-                logging.info(f"RAW RESPONSE: {response.model_dump_json()}")
-            elif hasattr(response, "to_json"):
-                logging.info(f"RAW RESPONSE: {response.to_json()}")
-            else:
-                logging.info(f"RAW RESPONSE: {response}")
-        except Exception as dump_err:
-            logging.warning(f"Could not serialize response: {dump_err}")
+        # --- Diagnostic: dump the full response so we can locate citation/source data.
+        # OFF by default: the raw response contains the employee's HR profile and
+        # full knowledge-base document text, which should not be persisted in
+        # telemetry. Enable temporarily with DEBUG_RAW_RESPONSE=true. ---
+        if os.environ.get("DEBUG_RAW_RESPONSE", "").lower() in ("1", "true", "yes"):
+            try:
+                if hasattr(response, "model_dump_json"):
+                    logging.info(f"RAW RESPONSE: {response.model_dump_json()}")
+                elif hasattr(response, "to_json"):
+                    logging.info(f"RAW RESPONSE: {response.to_json()}")
+                else:
+                    logging.info(f"RAW RESPONSE: {response}")
+            except Exception as dump_err:
+                logging.warning(f"Could not serialize response: {dump_err}")
 
+        # Structure-only diagnostics (no content) are always safe to log.
         for _i, _item in enumerate(getattr(response, "output", []) or []):
             logging.info(f"Output[{_i}] type={getattr(_item, 'type', None)} "
                          f"role={getattr(_item, 'role', None)}")
@@ -820,7 +861,9 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
                 raw = req.get_body().decode("utf-8", errors="replace")
             except Exception:
                 pass
-            logging.warning(f"send_hr_email: JSON parse failed. Raw body (truncated): {raw[:1000]}")
+            logging.warning("send_hr_email: JSON parse failed. Set DEBUG_RAW_RESPONSE=true to log the raw payload.")
+            if os.environ.get("DEBUG_RAW_RESPONSE", "").lower() in ("1", "true", "yes"):
+                logging.warning(f"send_hr_email raw body (truncated): {raw[:1000]}")
             if raw:
                 try:
                     body = json.loads(raw)

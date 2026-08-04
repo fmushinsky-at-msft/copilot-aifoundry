@@ -25,11 +25,29 @@ interaction and every email send. They land in the **`customEvents`** table.
 ## Setup
 
 - ☐ `APPLICATIONINSIGHTS_CONNECTION_STRING` must be set on the Function App.
-- ☐ `opencensus-ext-azure` must be in `requirements.txt` (already added) so events reach the
-  `customEvents` table.
+- ☐ `opencensus-ext-azure` must be in `requirements.txt` (already added, pinned) so events
+  reach the `customEvents` table.
 - ☐ If the exporter is unavailable, the code falls back to `traces` rows prefixed with
   `EVENT <name>` so no data is lost.
 - ☐ Allow 2–5 minutes for ingestion before querying.
+
+### Reliability on Consumption / Flex plans
+Azure Functions can freeze or recycle a worker immediately after a request completes, which
+would drop buffered telemetry. The code mitigates this by:
+- using a short exporter `export_interval` (2s), and
+- calling `flush_events()` immediately after each `track_event`.
+
+If you still see missing events under bursty load, check the Function App is not scaling to
+zero mid-flush and confirm ingestion sampling is disabled in `host.json`.
+
+### Verbose diagnostics are OFF by default
+`DEBUG_RAW_RESPONSE` controls logging of the **full model response** and **raw request
+bodies**. These contain the employee's HR profile, knowledge-base document text and the
+user's question, so they are **not** logged unless you explicitly enable the flag.
+
+- Enable temporarily for troubleshooting: set `DEBUG_RAW_RESPONSE=true`, reproduce, then
+  **remove the setting**.
+- Leave it unset in production.
 
 ---
 
