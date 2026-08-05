@@ -11,6 +11,7 @@ interaction and every email send. They land in the **`customEvents`** table.
 | `AgentInteractionFailed` | The agent call threw an error | `question`, `error`, `durationMs` |
 | `EmailSent` | HR email delivered successfully | `question`, `userEmail`, `userId`, `userName`, `conversationId`, `hrAddress`, `graphStatus` |
 | `EmailFailed` | HR email failed | `question`, `userEmail`, `errorCode`, `error` |
+| `UserFeedback` | User rates an answer 👍/👎 | `rating` (`positive`/`negative`), `rawRating`, `comment`, `hasComment`, `conversationId`, `userId`, `userName`, `userEmail`, and `question` **only for negative feedback** |
 
 > Custom dimensions are accessed in KQL as `customDimensions.<name>`.
 > `canAnswer` is stored as the string `"true"` / `"false"`.
@@ -334,6 +335,146 @@ customEvents
 			avgTokens = round(avg(total), 0),
 			totalTokens = sum(total)
 	by canAnswer = tostring(customDimensions.canAnswer)
+```
+
+---
+
+## User feedback
+
+Emitted by the `submit_feedback` route. Works in any cloud (including GCC) because
+it does not depend on the built-in Copilot Studio feedback store.
+
+### Satisfaction summary
+```kql
+customEvents
+| where name == "UserFeedback"
+| where timestamp > ago(30d)
+| summarize count() by rating = tostring(customDimensions.rating)
+```
+
+### Satisfaction rate over time
+```kql
+customEvents
+| where name == "UserFeedback"
+| where timestamp > ago(90d)
+| summarize
+	total    = count(),
+	positive = countif(tostring(customDimensions.rating) == "positive"),
+	negative = countif(tostring(customDimensions.rating) == "negative")
+	by bin(timestamp, 1d)
+| extend satisfactionPct = round(100.0 * positive / total, 1)
+| order by timestamp asc
+```
+
+### All negative feedback with comments (the review queue)
+```kql
+customEvents
+| where name == "UserFeedback"
+| where timestamp > ago(30d)
+| where tostring(customDimensions.rating) == "negative"
+| project timestamp,
+		  question = tostring(customDimensions.question),
+		  comment  = tostring(customDimensions.comment),
+		  user     = tostring(customDimensions.userName),
+		  userEmail = tostring(customDimensions.userEmail),
+		  conversationId = tostring(customDimensions.conversationId)
+| order by timestamp desc
+```
+
+### Only negative feedback that included a written comment
+```kql
+customEvents
+| where name == "UserFeedback"
+| where timestamp > ago(30d)
+| where tostring(customDimensions.rating) == "negative"
+| where tostring(customDimensions.hasComment) == "true"
+| project timestamp,
+		  comment  = tostring(customDimensions.comment),
+		  question = tostring(customDimensions.question)
+| order by timestamp desc
+```
+
+### Recurring themes in negative feedback
+```kql
+customEvents
+| where name == "UserFeedback"
+| where timestamp > ago(90d)
+| where tostring(customDimensions.rating) == "negative"
+| extend question = tolower(trim(" ", tostring(customDimensions.question)))
+| where isnotempty(question)
+| summarize complaints = count(), lastSeen = max(timestamp) by question
+| where complaints > 1
+| order by complaints desc
+```
+
+### Feedback joined to the original interaction
+Correlates a rating with the interaction's `canAnswer` flag and token cost, using
+`conversationId` as the join key.
+```kql
+let interactions =
+	customEvents
+	| where name == "AgentInteraction" and timestamp > ago(30d)
+	| project interactionTime = timestamp,
+			  conversationId  = tostring(customDimensions.conversationId),
+			  canAnswer       = tostring(customDimensions.canAnswer),
+			  totalTokens     = todouble(coalesce(customMeasurements.totalTokens, customDimensions.totalTokens));
+let feedback =
+	customEvents
+	| where name == "UserFeedback" and timestamp > ago(30d)
+	| project feedbackTime  = timestamp,
+			  conversationId = tostring(customDimensions.conversationId),
+			  rating         = tostring(customDimensions.rating),
+			  comment        = tostring(customDimensions.comment);
+feedback
+| join kind=leftouter interactions on conversationId
+| project feedbackTime, rating, comment, canAnswer, totalTokens, conversationId
+| order by feedbackTime desc
+```
+
+### Did the user still dislike an answer the agent *could* answer?
+Highlights answers that were confidently given but rated poorly — the highest-value
+content to review.
+```kql
+let interactions =
+	customEvents
+	| where name == "AgentInteraction" and timestamp > ago(30d)
+	| project conversationId = tostring(customDimensions.conversationId),
+			  canAnswer      = tostring(customDimensions.canAnswer);
+customEvents
+| where name == "UserFeedback" and timestamp > ago(30d)
+| where tostring(customDimensions.rating) == "negative"
+| extend conversationId = tostring(customDimensions.conversationId)
+| join kind=leftouter interactions on conversationId
+| where canAnswer == "true"
+| project timestamp,
+		  comment  = tostring(customDimensions.comment),
+		  question = tostring(customDimensions.question),
+		  conversationId
+| order by timestamp desc
+```
+
+### Feedback response rate
+How many interactions actually receive a rating.
+```kql
+let interactions = toscalar(
+	customEvents | where name == "AgentInteraction" and timestamp > ago(30d) | count);
+let rated = toscalar(
+	customEvents | where name == "UserFeedback" and timestamp > ago(30d) | count);
+print interactions = interactions,
+	  rated = rated,
+	  responseRatePct = round(100.0 * rated / interactions, 1)
+```
+
+### Users giving the most negative feedback
+```kql
+customEvents
+| where name == "UserFeedback"
+| where timestamp > ago(30d)
+| summarize total = count(),
+			negative = countif(tostring(customDimensions.rating) == "negative")
+	by user = tostring(customDimensions.userName)
+| extend negativePct = round(100.0 * negative / total, 1)
+| order by negative desc
 ```
 
 ---

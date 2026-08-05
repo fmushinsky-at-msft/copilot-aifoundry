@@ -1062,3 +1062,124 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             status_code=500,
             mimetype="application/json",
         )
+
+
+@app.route(route="submit_feedback")
+def submit_feedback(req: func.HttpRequest) -> func.HttpResponse:
+    """Record user feedback (thumbs up/down plus an optional comment).
+
+    Provides feedback analytics that work in environments where the built-in
+    Copilot Studio feedback store is unavailable (e.g. GCC), and lets feedback be
+    joined to AgentInteraction events via conversation_id.
+
+    Request (query string or JSON body):
+        - rating (required): up|down (also accepts positive|negative, 1|0, yes|no,
+          helpful|unhelpful, true|false)
+        - comment (optional): free-text comment, typically for negative feedback
+        - question (optional): the question being rated
+        - conversation_id (optional): correlates with AgentInteraction.conversationId
+        - user_id / user_full_name / user_email (optional): who gave the feedback
+    """
+    logging.info("submit_feedback trigger invoked.")
+
+    # --- Parse inputs (query params first, then JSON body) ---
+    rating = req.params.get("rating")
+    comment = req.params.get("comment")
+    question = req.params.get("question")
+    conversation_id = req.params.get("conversation_id")
+    user_id = req.params.get("user_id")
+    user_full_name = req.params.get("user_full_name")
+    user_email = req.params.get("user_email")
+
+    if not rating:
+        body = None
+        try:
+            body = req.get_json()
+        except ValueError:
+            raw = ""
+            try:
+                raw = req.get_body().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            logging.warning("submit_feedback: JSON parse failed. Set DEBUG_RAW_RESPONSE=true to log the raw payload.")
+            if os.environ.get("DEBUG_RAW_RESPONSE", "").lower() in ("1", "true", "yes"):
+                logging.warning(f"submit_feedback raw body (truncated): {raw[:1000]}")
+            if raw:
+                try:
+                    body = json.loads(raw)
+                except Exception:
+                    body = None
+
+        # Some Power Automate connectors double-encode the JSON payload.
+        if isinstance(body, (str, bytes)):
+            try:
+                body = json.loads(body)
+                logging.info("submit_feedback: decoded double-encoded JSON body.")
+            except Exception:
+                body = None
+
+        if isinstance(body, dict):
+            rating = body.get("rating")
+            comment = body.get("comment")
+            question = body.get("question")
+            conversation_id = body.get("conversation_id")
+            user_id = body.get("user_id")
+            user_full_name = body.get("user_full_name")
+            user_email = body.get("user_email")
+
+    if not rating:
+        logging.warning("submit_feedback: returning 400 - no 'rating' supplied.")
+        return func.HttpResponse(
+            json.dumps({"error": "Missing required parameter 'rating'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    # Normalise the many ways a yes/no rating can arrive from a topic.
+    raw_rating = str(rating).strip().lower()
+    positive_values = ("up", "positive", "1", "yes", "y", "true", "helpful", "good",
+                       "thumbs up", "thumbsup", "\N{THUMBS UP SIGN}")
+    negative_values = ("down", "negative", "0", "no", "n", "false", "unhelpful", "bad",
+                       "thumbs down", "thumbsdown", "\N{THUMBS DOWN SIGN}")
+
+    if raw_rating in positive_values:
+        normalized = "positive"
+    elif raw_rating in negative_values:
+        normalized = "negative"
+    else:
+        logging.warning(f"submit_feedback: unrecognised rating '{raw_rating}'.")
+        return func.HttpResponse(
+            json.dumps({
+                "error": "Parameter 'rating' must indicate up/down",
+                "received": raw_rating,
+            }),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    props = {
+        "rating": normalized,
+        "rawRating": raw_rating,
+        "conversationId": conversation_id,
+        "userId": user_id,
+        "userName": user_full_name,
+        "userEmail": user_email,
+        "hasComment": bool(comment and str(comment).strip()),
+    }
+    if comment and str(comment).strip():
+        props["comment"] = _truncate(str(comment).strip())
+    # Capture the question only for negative feedback, where it is needed for
+    # review. Positive feedback records no question text.
+    if normalized == "negative" and question:
+        props["question"] = _truncate(question)
+
+    track_event("UserFeedback", properties=props, measurements={"isNegative": 1 if normalized == "negative" else 0})
+
+    logging.info(f"Feedback recorded: rating={normalized} hasComment={props['hasComment']} "
+                 f"conversationId={conversation_id or 'none'}")
+
+    return func.HttpResponse(
+        json.dumps({"recorded": True, "rating": normalized, "message": "Thanks for your feedback."}),
+        status_code=200,
+        mimetype="application/json",
+    )
