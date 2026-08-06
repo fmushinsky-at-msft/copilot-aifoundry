@@ -72,9 +72,25 @@ def flush_events():
     Azure Functions may freeze or recycle the worker as soon as a request
     completes, which would silently drop buffered telemetry. Call this before
     returning from a request. Never raises.
+
+    A timeout is always supplied: without one the exporter can block the request
+    thread if Application Insights is slow or unreachable. Tune with
+    TELEMETRY_FLUSH_TIMEOUT (seconds, default 2). Set TELEMETRY_FLUSH=false to
+    skip flushing entirely if you prefer lower latency over guaranteed delivery.
     """
+    if os.environ.get("TELEMETRY_FLUSH", "true").lower() in ("0", "false", "no"):
+        return
     try:
-        if _event_handler is not None:
+        if _event_handler is None:
+            return
+        try:
+            timeout = float(os.environ.get("TELEMETRY_FLUSH_TIMEOUT", "2"))
+        except ValueError:
+            timeout = 2.0
+        try:
+            _event_handler.flush(timeout=timeout)
+        except TypeError:
+            # Older exporters do not accept a timeout argument.
             _event_handler.flush()
     except Exception as flush_err:
         logging.warning(f"flush_events failed: {flush_err}")
@@ -1218,29 +1234,40 @@ def submit_feedback(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    props = {
-        "rating": normalized,
-        "rawRating": raw_rating,
-        "conversationId": conversation_id,
-        "userId": user_id,
-        "userName": user_full_name,
-        "userEmail": user_email,
-        "hasComment": bool(comment and str(comment).strip()),
-    }
-    if comment and str(comment).strip():
-        props["comment"] = _truncate(str(comment).strip())
-    # Capture the question only for negative feedback, where it is needed for
-    # review. Positive feedback records no question text.
-    if normalized == "negative" and question:
-        props["question"] = _truncate(question)
+    try:
+        props = {
+            "rating": normalized,
+            "rawRating": raw_rating,
+            "conversationId": conversation_id,
+            "userId": user_id,
+            "userName": user_full_name,
+            "userEmail": user_email,
+            "hasComment": bool(comment and str(comment).strip()),
+        }
+        if comment and str(comment).strip():
+            props["comment"] = _truncate(str(comment).strip())
+        # Capture the question only for negative feedback, where it is needed for
+        # review. Positive feedback records no question text.
+        if normalized == "negative" and question:
+            props["question"] = _truncate(question)
 
-    track_event("UserFeedback", properties=props, measurements={"isNegative": 1 if normalized == "negative" else 0})
+        track_event("UserFeedback", properties=props,
+                    measurements={"isNegative": 1 if normalized == "negative" else 0})
 
-    logging.info(f"Feedback recorded: rating={normalized} hasComment={props['hasComment']} "
-                 f"conversationId={conversation_id or 'none'}")
+        logging.info(f"Feedback recorded: rating={normalized} hasComment={props['hasComment']} "
+                     f"conversationId={conversation_id or 'none'}")
 
-    return func.HttpResponse(
-        json.dumps({"recorded": True, "rating": normalized, "message": "Thanks for your feedback."}),
-        status_code=200,
-        mimetype="application/json",
-    )
+        return func.HttpResponse(
+            json.dumps({"recorded": True, "rating": normalized, "message": "Thanks for your feedback."}),
+            status_code=200,
+            mimetype="application/json",
+        )
+    except Exception as e:
+        logging.error(f"submit_feedback error: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return func.HttpResponse(
+            json.dumps({"recorded": False, "error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
+        )
