@@ -440,8 +440,86 @@ customEvents
 | order by timestamp desc
 ```
 
-### Recurring themes in negative feedback
+### Negative feedback where NO email was sent to HR
+The "silent dissatisfaction" list: the user was unhappy, but the question was never
+escalated to HR. These get no follow-up from anyone, so they are the most likely to be
+lost — usually the highest-value review queue.
+
 ```kql
+customEvents
+| where name == "UserFeedback"
+| where timestamp > ago(30d)
+| where tostring(customDimensions.rating) == "negative"
+| extend conversationId = tostring(customDimensions.conversationId)
+| where isnotempty(conversationId)          // unlinkable rows would look like false positives
+| join kind=leftanti (
+    customEvents
+    | where name == "EmailSent"
+    | where timestamp > ago(30d)
+    | extend conversationId = tostring(customDimensions.conversationId)
+    | where isnotempty(conversationId)
+    | distinct conversationId
+  ) on conversationId
+| project timestamp,
+          question  = tostring(customDimensions.question),
+          comment   = tostring(customDimensions.comment),
+          user      = tostring(customDimensions.userName),
+          userEmail = tostring(customDimensions.userEmail),
+          conversationId
+| order by timestamp desc
+```
+
+> **How it works:** `join kind=leftanti` keeps only the feedback rows that have **no**
+> matching `EmailSent` for the same `conversationId`.
+>
+> ⚠️ Rows with an empty `conversationId` are excluded — they cannot be correlated and would
+> otherwise always appear as "not emailed". If you see few results, confirm the topic passes
+> `conversation_id` to **both** the feedback and email actions.
+
+**Summary count version:**
+```kql
+let window = 30d;
+let negative =
+    customEvents
+    | where name == "UserFeedback" and timestamp > ago(window)
+    | where tostring(customDimensions.rating) == "negative"
+    | extend conversationId = tostring(customDimensions.conversationId)
+    | where isnotempty(conversationId);
+let emailed =
+    customEvents
+    | where name == "EmailSent" and timestamp > ago(window)
+    | extend conversationId = tostring(customDimensions.conversationId)
+    | where isnotempty(conversationId)
+    | distinct conversationId;
+let total = toscalar(negative | count);
+let escalated = toscalar(negative | join kind=innerunique (emailed) on conversationId | count);
+print negativeFeedback = total,
+      escalatedToHr = escalated,
+      notEscalated = total - escalated,
+      notEscalatedPct = round(100.0 * (total - escalated) / total, 1)
+```
+
+**Daily trend of unescalated negative feedback:**
+```kql
+customEvents
+| where name == "UserFeedback"
+| where timestamp > ago(90d)
+| where tostring(customDimensions.rating) == "negative"
+| extend conversationId = tostring(customDimensions.conversationId)
+| where isnotempty(conversationId)
+| join kind=leftanti (
+    customEvents
+    | where name == "EmailSent"
+    | where timestamp > ago(90d)
+    | extend conversationId = tostring(customDimensions.conversationId)
+    | where isnotempty(conversationId)
+    | distinct conversationId
+  ) on conversationId
+| summarize unescalatedNegative = count() by bin(timestamp, 1d)
+| order by timestamp asc
+```
+
+### Recurring themes in negative feedback
 customEvents
 | where name == "UserFeedback"
 | where timestamp > ago(90d)
