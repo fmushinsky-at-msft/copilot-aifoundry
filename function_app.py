@@ -784,8 +784,8 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         }
 
         # --- Telemetry: one event per interaction. The canAnswer dimension
-        # distinguishes answered from unanswered questions. Question text is only
-        # captured when the agent could NOT answer, so it can be reviewed later.
+        # distinguishes answered from unanswered questions. The question text is
+        # always captured so every interaction can be reviewed and analysed.
         # Agent replies are never captured. ---
         _elapsed_ms = int((time.time() - _started) * 1000)
         _params = parameters if isinstance(parameters, dict) else {}
@@ -796,9 +796,8 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             "userName": _params.get("user_full_name"),
             "canAnswer": can_answer,
             "isNewConversation": not threadid,
+            "question": _truncate(message),
         }
-        if not can_answer:
-            _props["question"] = _truncate(message)
 
         # Token usage reported by the model for this turn (input/output/total,
         # plus reasoning and cached-input counts when the model provides them).

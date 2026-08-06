@@ -7,7 +7,7 @@ interaction and every email send. They land in the **`customEvents`** table.
 
 | Event name | When | Key custom dimensions |
 |---|---|---|
-| `AgentInteraction` | Every call to `agent_httptrigger` | `canAnswer`, `agentName`, `conversationId`, `userId`, `userName`, `isNewConversation`, `durationMs`, token counts (`inputTokens`, `outputTokens`, `totalTokens`, `reasoningTokens`, `cachedInputTokens`), and `question` **only when `canAnswer` is `false`** |
+| `AgentInteraction` | Every call to `agent_httptrigger` | `question` (**always captured**), `canAnswer`, `agentName`, `conversationId`, `userId`, `userName`, `isNewConversation`, `durationMs`, token counts (`inputTokens`, `outputTokens`, `totalTokens`, `reasoningTokens`, `cachedInputTokens`) |
 | `AgentInteractionFailed` | The agent call threw an error | `question`, `error`, `durationMs` |
 | `EmailSent` | HR email delivered successfully | `question`, `userEmail`, `userId`, `userName`, `conversationId`, `hrAddress` (all recipients, comma separated), `graphStatus`, `recipientCount` |
 | `EmailFailed` | HR email failed | `question`, `userEmail`, `errorCode`, `error` |
@@ -17,9 +17,7 @@ interaction and every email send. They land in the **`customEvents`** table.
 > `canAnswer` is stored as the string `"true"` / `"false"`.
 
 ### What is deliberately NOT captured
-- **Agent replies are never recorded.**
-- **Question text is only recorded when it could not be answered, or when it was submitted
-  for an email.** Successfully answered questions record no question text.
+- **Agent replies are never recorded.** Only the user's question text is stored.
 
 ---
 
@@ -60,10 +58,10 @@ customEvents
 | where name == "AgentInteraction"
 | where timestamp > ago(24h)
 | project timestamp,
+		  question    = tostring(customDimensions.question),
 		  canAnswer   = tostring(customDimensions.canAnswer),
 		  user        = tostring(customDimensions.userName),
-		  durationMs  = todouble(customDimensions.durationMs),
-		  question    = tostring(customDimensions.question)  // populated only when unanswered
+		  durationMs  = todouble(customDimensions.durationMs)
 | order by timestamp desc
 ```
 
@@ -116,6 +114,54 @@ customEvents
 | order by occurrences desc
 ```
 > Use this to decide what content to add to the knowledge base.
+
+### 5a. Most frequent questions overall (answered or not)
+Now that question text is captured on every interaction, you can see what users ask most —
+useful for prioritising content, shortcuts, and quick replies.
+```kql
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(30d)
+| extend question = tolower(trim(" ", tostring(customDimensions.question)))
+| where isnotempty(question)
+| summarize asked = count(),
+            answered = countif(tostring(customDimensions.canAnswer) == "true"),
+            failed = countif(tostring(customDimensions.canAnswer) == "false"),
+            lastAsked = max(timestamp)
+    by question
+| extend successRatePct = round(100.0 * answered / asked, 1)
+| order by asked desc
+```
+
+### 5b. Popular questions with a poor success rate
+The highest-impact content gaps: asked often, answered rarely.
+```kql
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(30d)
+| extend question = tolower(trim(" ", tostring(customDimensions.question)))
+| where isnotempty(question)
+| summarize asked = count(),
+            answered = countif(tostring(customDimensions.canAnswer) == "true")
+    by question
+| where asked >= 3
+| extend successRatePct = round(100.0 * answered / asked, 1)
+| where successRatePct < 80
+| order by asked desc
+```
+
+### 5c. Search question text for a keyword
+```kql
+customEvents
+| where name == "AgentInteraction"
+| where timestamp > ago(30d)
+| where tostring(customDimensions.question) has "dental"
+| project timestamp,
+          question  = tostring(customDimensions.question),
+          canAnswer = tostring(customDimensions.canAnswer),
+          user      = tostring(customDimensions.userName)
+| order by timestamp desc
+```
 
 ### 6. All emails sent to HR, with the question text
 ```kql
@@ -493,10 +539,9 @@ traces
 ---
 
 ## Privacy note
-`question` text is captured **only** when the agent could not answer, when the call failed,
-or when the question was emailed to HR. Answered questions record no question text, and
-**agent replies are never captured**. User identity (`userEmail` / `userId` / `userName`) is
-recorded on interactions.
+`question` text is captured on **every** interaction, along with user identity
+(`userEmail` / `userId` / `userName`). **Agent replies are never captured.**
+Benefits questions can contain personal or health-related details.
 
 - ☐ Confirm this retention is acceptable to your privacy/compliance team.
 - ☐ Review the App Insights **data retention** period (default 90 days).
