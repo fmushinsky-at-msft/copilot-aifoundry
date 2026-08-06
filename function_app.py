@@ -835,7 +835,9 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         - question (required): the user's question to forward
         - user_email (required): the employee's email; the message is sent from this
           mailbox so HR sees it as coming directly from them
-        - to_address (required): destination mailbox for the question
+        - to_address (required): destination mailbox(es) for the question. Accepts a
+          single address, several separated by ';' or ',', or a JSON array.
+          Duplicates are removed.
         - user_full_name (optional): who is asking
         - user_id (optional): employee id
         - conversation_id (optional): for traceability
@@ -844,6 +846,9 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         - HR_ALLOWED_RECIPIENTS (optional): comma/semicolon separated allow-list of
           addresses or domains that 'to_address' may target. Strongly recommended,
           otherwise any caller with the function key can pick any recipient.
+          Every recipient must match, or the request is rejected with 403.
+        - MAX_RECIPIENTS (optional): maximum recipients per request (default 10,
+          0 disables the cap).
     """
     logging.info("send_hr_email trigger invoked.")
 
@@ -911,8 +916,27 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    to_addr = (to_address or "").strip()
-    if not to_addr:
+    # to_address accepts a single address, a delimited string
+    # ("a@x.com; b@x.com" or comma separated), or a JSON array of addresses.
+    if isinstance(to_address, (list, tuple)):
+        raw_recipients = [str(a) for a in to_address]
+    else:
+        raw_recipients = re.split(r"[;,]", str(to_address or ""))
+
+    # Trim, drop blanks, and de-duplicate case-insensitively while keeping order.
+    recipients = []
+    seen_recipients = set()
+    for candidate in raw_recipients:
+        cleaned = candidate.strip().strip("<>").strip()
+        if not cleaned:
+            continue
+        key = cleaned.lower()
+        if key in seen_recipients:
+            continue
+        seen_recipients.add(key)
+        recipients.append(cleaned)
+
+    if not recipients:
         logging.warning("send_hr_email: returning 400 - no 'to_address' supplied.")
         return func.HttpResponse(
             json.dumps({"error": "Missing required parameter 'to_address'"}),
@@ -920,27 +944,56 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
         )
 
-    # Basic shape check so malformed input fails fast rather than at Graph.
-    if not EMAIL_RE.match(to_addr):
-        logging.warning("send_hr_email: returning 400 - 'to_address' is not a valid email address.")
+    # Guardrail: cap the number of recipients so the endpoint cannot be used to
+    # fan out mail. Configurable via MAX_RECIPIENTS (default 10).
+    try:
+        max_recipients = int(os.environ.get("MAX_RECIPIENTS", "10"))
+    except ValueError:
+        max_recipients = 10
+    if max_recipients > 0 and len(recipients) > max_recipients:
+        logging.warning(f"send_hr_email: {len(recipients)} recipients exceeds MAX_RECIPIENTS={max_recipients}.")
         return func.HttpResponse(
-            json.dumps({"error": "Parameter 'to_address' is not a valid email address"}),
+            json.dumps({
+                "error": f"Too many recipients (limit {max_recipients})",
+                "received": len(recipients),
+            }),
             status_code=400,
             mimetype="application/json",
         )
 
-    # Optional allow-list. Because the recipient now comes from the request, this
+    # Basic shape check so malformed input fails fast rather than at Graph.
+    invalid = [a for a in recipients if not EMAIL_RE.match(a)]
+    if invalid:
+        logging.warning(f"send_hr_email: returning 400 - invalid recipient(s): {invalid}")
+        return func.HttpResponse(
+            json.dumps({
+                "error": "Parameter 'to_address' contains invalid email address(es)",
+                "invalid": invalid,
+            }),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    # Optional allow-list. Because the recipients come from the request, this
     # prevents the endpoint being used to mail arbitrary addresses. Entries may be
     # full addresses ("hr@panynj.gov") or domains ("@panynj.gov" / "panynj.gov").
+    # Every recipient must be permitted.
     allowed_raw = os.environ.get("HR_ALLOWED_RECIPIENTS", "").strip()
     if allowed_raw:
         allowed = [a.strip().lower().lstrip("@") for a in re.split(r"[;,]", allowed_raw) if a.strip()]
-        target = to_addr.lower()
-        target_domain = target.split("@", 1)[-1]
-        if target not in allowed and target_domain not in allowed:
-            logging.warning(f"send_hr_email: recipient '{to_addr}' is not in HR_ALLOWED_RECIPIENTS.")
+        blocked = []
+        for addr in recipients:
+            target = addr.lower()
+            target_domain = target.split("@", 1)[-1]
+            if target not in allowed and target_domain not in allowed:
+                blocked.append(addr)
+        if blocked:
+            logging.warning(f"send_hr_email: recipient(s) not in HR_ALLOWED_RECIPIENTS: {blocked}")
             return func.HttpResponse(
-                json.dumps({"error": "Recipient address is not permitted"}),
+                json.dumps({
+                    "error": "One or more recipient addresses are not permitted",
+                    "blocked": blocked,
+                }),
                 status_code=403,
                 mimetype="application/json",
             )
@@ -949,6 +1002,9 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             "HR_ALLOWED_RECIPIENTS is not set; 'to_address' is unrestricted. "
             "Set it to limit which recipients this endpoint may email."
         )
+
+    # Kept for logging/telemetry readability.
+    to_addr = ", ".join(recipients)
 
     try:
         # --- Acquire a Microsoft Graph token via the managed identity ---
@@ -972,7 +1028,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         message = {
             "subject": "Benefits question forwarded from the assistant",
             "body": {"contentType": "Text", "content": email_text},
-            "toRecipients": [{"emailAddress": {"address": to_addr}}],
+            "toRecipients": [{"emailAddress": {"address": a}} for a in recipients],
         }
 
         # The email is always sent from the employee's own mailbox, so HR sees the
@@ -1001,7 +1057,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         with urllib.request.urlopen(request, timeout=30) as resp:
             status = resp.status  # 202 Accepted on success
 
-        logging.info(f"HR email sent (status {status}) to {to_addr} as {sender_mailbox}.")
+        logging.info(f"HR email sent (status {status}) to {len(recipients)} recipient(s) [{to_addr}] as {sender_mailbox}.")
         track_event(
             "EmailSent",
             properties={
@@ -1013,9 +1069,14 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
                 "hrAddress": to_addr,
                 "graphStatus": status,
             },
+            measurements={"recipientCount": len(recipients)},
         )
         return func.HttpResponse(
-            json.dumps({"sent": True, "message": "Your question has been emailed to HR."}),
+            json.dumps({
+                "sent": True,
+                "recipients": recipients,
+                "message": "Your question has been emailed to HR."
+            }),
             status_code=200,
             mimetype="application/json",
         )

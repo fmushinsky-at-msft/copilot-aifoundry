@@ -9,7 +9,7 @@ interaction and every email send. They land in the **`customEvents`** table.
 |---|---|---|
 | `AgentInteraction` | Every call to `agent_httptrigger` | `canAnswer`, `agentName`, `conversationId`, `userId`, `userName`, `isNewConversation`, `durationMs`, token counts (`inputTokens`, `outputTokens`, `totalTokens`, `reasoningTokens`, `cachedInputTokens`), and `question` **only when `canAnswer` is `false`** |
 | `AgentInteractionFailed` | The agent call threw an error | `question`, `error`, `durationMs` |
-| `EmailSent` | HR email delivered successfully | `question`, `userEmail`, `userId`, `userName`, `conversationId`, `hrAddress`, `graphStatus` |
+| `EmailSent` | HR email delivered successfully | `question`, `userEmail`, `userId`, `userName`, `conversationId`, `hrAddress` (all recipients, comma separated), `graphStatus`, `recipientCount` |
 | `EmailFailed` | HR email failed | `question`, `userEmail`, `errorCode`, `error` |
 | `UserFeedback` | User rates an answer 👍/👎 | `rating` (`positive`/`negative`), `rawRating`, `comment`, `hasComment`, `conversationId`, `userId`, `userName`, `userEmail`, and `question` **only for negative feedback** |
 

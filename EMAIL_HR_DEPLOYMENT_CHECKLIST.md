@@ -44,6 +44,8 @@ Location: **Azure Portal → Function App → Settings → Environment variables
   or domains the caller may email, e.g. `OpenEnrollment@panynj.gov;benefits@panynj.gov`
   or just `panynj.gov`. Without it, any caller holding the function key can direct email to
   **any** address from the employee's mailbox.
+- ☐ (Optional) Add `MAX_RECIPIENTS` = maximum recipients allowed per request
+  (default `10`; set `0` to disable the cap).
 - ☐ (If not already present) `APPLICATIONINSIGHTS_CONNECTION_STRING` = your App Insights
   connection string (so `logging.info`/error traces are visible).
 - ☐ Click **Apply / Save**.
@@ -234,7 +236,7 @@ Location: **Copilot Studio → your agent → Topics → the topic that calls th
 	  - `user_id` → `text_2`
 	  - `user_email` → **System → User.PrincipalName** (required; see Section 5)
 	  - `conversation_id` → `threadId` from the agent action
-	  - `to_address` → the HR mailbox (literal value or a topic variable)
+	  - `to_address` → the HR mailbox(es); one address, or several separated by `;`
 	- ☐ After it returns → **Send a message** with the confirmation (`message`:
 	  "Your question has been emailed to HR.").
 	- ☐ On **No** → send a courteous closing message.
@@ -297,8 +299,9 @@ curl -X POST "https://<FUNCTION_APP>.azurewebsites.net/api/send_hr_email?code=<F
 
 | Setting | Where | Value / Notes |
 |---|---|---|
-| `HR_ALLOWED_RECIPIENTS` | Function App settings | Optional allow-list restricting `to_address` |
-| `to_address` input | Power Automate flow + topic | Destination HR mailbox, supplied per request |
+| `HR_ALLOWED_RECIPIENTS` | Function App settings | Optional allow-list restricting `to_address`; every recipient must match |
+| `MAX_RECIPIENTS` | Function App settings | Optional cap on recipients per request (default 10) |
+| `to_address` input | Power Automate flow + topic | Destination mailbox(es); `;`-separated for multiple |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Function App settings | Telemetry/logging |
 | `Mail.Send` (Application) | Microsoft Graph, via PowerShell | Granted to MI object id |
 | Application Access Policy | Exchange Online PowerShell | Scope MI to the assistant's user mailboxes |

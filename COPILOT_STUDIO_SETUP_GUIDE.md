@@ -281,7 +281,7 @@ Testing now means that if something breaks later, you know it is *not* the flow.
    - `user_id` → `TEST01`
    - `conversation_id` → `test-001`
    - `user_email` → your own work email
-   - `to_address` → the HR mailbox (e.g. `OpenEnrollment@panynj.gov`)
+   - `to_address` → the HR mailbox (e.g. `OpenEnrollment@panynj.gov`; separate multiple with `;`)
 4. Click **Run flow** → **Done**.
 5. Watch the run. Every step should show a **green tick**.
 6. Click the **HTTP** step and check **Outputs** → **Status code** should be **200**, and the
@@ -409,7 +409,7 @@ Copilot Studio automatically creates a branch for each option.
 | `user_full_name` | the user's display name | see note below |
 | `user_id` | the user's employee id | see note below |
 | `conversation_id` | the agent action's **threadId** output | returned by Flow A |
-| `to_address` | the HR mailbox, e.g. `OpenEnrollment@panynj.gov` | type it directly, or use a topic variable |
+| `to_address` | the HR mailbox, e.g. `OpenEnrollment@panynj.gov` (separate multiple with `;`) | type it directly, or use a topic variable |
 
 > **Where do `user_full_name` and `user_id` come from?**
 > These are the same two values your existing **Flow A** already sends to Azure as
