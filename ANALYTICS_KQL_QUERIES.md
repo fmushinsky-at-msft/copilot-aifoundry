@@ -279,18 +279,35 @@ customEvents
 
 ## Token consumption
 
-Token counts are emitted as **measurements** on `AgentInteraction`. Depending on the
-App Insights schema they surface either in `customMeasurements` or `customDimensions`, so
-these queries read `customMeasurements` first and fall back to `customDimensions`.
+⚠️ **Token counts land in `customDimensions`, not `customMeasurements`.**
+
+Although they are passed to `track_event()` as *measurements*, `track_event()` merges them into
+the dimensions dictionary before sending:
+
+```python
+dims = _clean_dimensions(properties)
+if measurements:
+	dims.update({k: v for k, v in measurements.items() if isinstance(v, (int, float))})
+```
+
+So `customMeasurements` is **always empty** for events from this app. Read numerics directly
+from `customDimensions`.
+
+> **Do not use `customDimensions.x`.** Both operands are
+> `dynamic`, and `coalesce` requires compatible scalar types — this can raise a semantic error
+> rather than gracefully falling back. It also reads a column that never populates.
+>
+> This applies to every numeric dimension: `durationMs`, `inputTokens`, `outputTokens`,
+> `totalTokens`, `reasoningTokens`, `cachedInputTokens`, `recipientCount`, `isNegative`.
 
 ### Tokens per interaction
 ```kql
 customEvents
 | where name == "AgentInteraction"
 | where timestamp > ago(24h)
-| extend inTok  = todouble(coalesce(customMeasurements.inputTokens,  customDimensions.inputTokens)),
-		 outTok = todouble(coalesce(customMeasurements.outputTokens, customDimensions.outputTokens)),
-		 total  = todouble(coalesce(customMeasurements.totalTokens,  customDimensions.totalTokens))
+| extend inTok  = todouble(customDimensions.inputTokens),
+		 outTok = todouble(customDimensions.outputTokens),
+		 total  = todouble(customDimensions.totalTokens)
 | project timestamp,
 		  user = tostring(customDimensions.userName),
 		  canAnswer = tostring(customDimensions.canAnswer),
@@ -303,8 +320,8 @@ customEvents
 customEvents
 | where name == "AgentInteraction"
 | where timestamp > ago(30d)
-| extend inTok  = todouble(coalesce(customMeasurements.inputTokens,  customDimensions.inputTokens)),
-		 outTok = todouble(coalesce(customMeasurements.outputTokens, customDimensions.outputTokens))
+| extend inTok  = todouble(customDimensions.inputTokens),
+		 outTok = todouble(customDimensions.outputTokens)
 | summarize interactions = count(),
 			inputTokens  = sum(inTok),
 			outputTokens = sum(outTok),
@@ -321,8 +338,8 @@ let outputRatePer1K = 0.00060;   // <-- set to your model's output price
 customEvents
 | where name == "AgentInteraction"
 | where timestamp > ago(30d)
-| extend inTok  = todouble(coalesce(customMeasurements.inputTokens,  customDimensions.inputTokens)),
-		 outTok = todouble(coalesce(customMeasurements.outputTokens, customDimensions.outputTokens))
+| extend inTok  = todouble(customDimensions.inputTokens),
+		 outTok = todouble(customDimensions.outputTokens)
 | summarize inputTokens = sum(inTok), outputTokens = sum(outTok)
 	by bin(timestamp, 1d)
 | extend estimatedCost = round(inputTokens / 1000 * inputRatePer1K
@@ -335,7 +352,7 @@ customEvents
 customEvents
 | where name == "AgentInteraction"
 | where timestamp > ago(30d)
-| extend total = todouble(coalesce(customMeasurements.totalTokens, customDimensions.totalTokens))
+| extend total = todouble(customDimensions.totalTokens)
 | summarize interactions = count(),
 			totalTokens = sum(total),
 			avgTokens   = round(avg(total), 0)
@@ -348,7 +365,7 @@ customEvents
 customEvents
 | where name == "AgentInteraction"
 | where timestamp > ago(7d)
-| extend total = todouble(coalesce(customMeasurements.totalTokens, customDimensions.totalTokens))
+| extend total = todouble(customDimensions.totalTokens)
 | top 25 by total desc
 | project timestamp, total,
 		  canAnswer = tostring(customDimensions.canAnswer),
@@ -362,8 +379,8 @@ Shows how much of the output is model "thinking" — useful when tuning reasonin
 customEvents
 | where name == "AgentInteraction"
 | where timestamp > ago(7d)
-| extend outTok    = todouble(coalesce(customMeasurements.outputTokens,    customDimensions.outputTokens)),
-		 reasoning = todouble(coalesce(customMeasurements.reasoningTokens, customDimensions.reasoningTokens))
+| extend outTok    = todouble(customDimensions.outputTokens),
+		 reasoning = todouble(customDimensions.reasoningTokens)
 | where isnotnull(reasoning)
 | summarize outputTokens = sum(outTok), reasoningTokens = sum(reasoning)
 	by bin(timestamp, 1d)
@@ -376,7 +393,7 @@ customEvents
 customEvents
 | where name == "AgentInteraction"
 | where timestamp > ago(30d)
-| extend total = todouble(coalesce(customMeasurements.totalTokens, customDimensions.totalTokens))
+| extend total = todouble(customDimensions.totalTokens)
 | summarize interactions = count(),
 			avgTokens = round(avg(total), 0),
 			totalTokens = sum(total)
@@ -541,7 +558,7 @@ let interactions =
 	| project interactionTime = timestamp,
 			  conversationId  = tostring(customDimensions.conversationId),
 			  canAnswer       = tostring(customDimensions.canAnswer),
-			  totalTokens     = todouble(coalesce(customMeasurements.totalTokens, customDimensions.totalTokens));
+			  totalTokens     = todouble(customDimensions.totalTokens);
 let feedback =
 	customEvents
 	| where name == "UserFeedback" and timestamp > ago(30d)
