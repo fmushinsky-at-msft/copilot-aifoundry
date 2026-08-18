@@ -2,8 +2,24 @@
 # The Python Worker is managed by Azure Functions platform
 # Manually managing azure-functions-worker may cause unexpected issues
 
+# Versions are pinned deliberately. Flex Consumption installs dependencies at
+# deploy time, so an unpinned manifest can resolve differently between two
+# deployments of identical code and break the app with no source change.
+#
+# Why openai is pinned to 2.x:
+#   azure-ai-projects 2.0.1 requires "openai>=2.8.0" with no upper bound.
+#   openai 3.x switched its HTTP transport from httpx to httpx2, which caused
+#   "ModuleNotFoundError: No module named 'httpx'" at import time and left the
+#   host with zero indexed functions. Staying on 2.x keeps the httpx transport.
+#   Re-test get_openai_client(), conversations and responses before moving to 3.x.
+
+# Left unpinned intentionally: the Python worker is managed by the Functions
+# platform, and a previous pin ("azure-functions>=1.24.0,<2", commit 2a40d65)
+# had to be reverted. Let the platform resolve a compatible version.
 azure-functions
+
 azure-ai-projects==2.0.1
-azure-identity
-aiohttp
+azure-identity==1.25.3
+openai==2.54.0
+aiohttp==3.14.3
 opencensus-ext-azure==1.1.13
