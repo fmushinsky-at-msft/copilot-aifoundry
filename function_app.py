@@ -1052,9 +1052,9 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
 
         message = {
             "subject": (
-                f"[{agent_label}] Benefits question forwarded from the assistant"
+                f"[{agent_label}] question forwarded from the assistant"
                 if agent_label
-                else "Benefits question forwarded from the assistant"
+                else "Unknown Agent question forwarded from the assistant"
             ),
             "body": {"contentType": "Text", "content": email_text},
             "toRecipients": [{"emailAddress": {"address": a}} for a in recipients],
