@@ -856,6 +856,8 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         - user_full_name (optional): who is asking
         - user_id (optional): employee id
         - conversation_id (optional): for traceability
+        - agent_name (optional): which agent produced the escalation; recorded on the
+          telemetry event and included in the email subject
 
     Environment variables:
         - HR_ALLOWED_RECIPIENTS (optional): comma/semicolon separated allow-list of
@@ -874,6 +876,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
     user_email = req.params.get("user_email")
     to_address = req.params.get("to_address")
     conversation_id = req.params.get("conversation_id")
+    agent_name = req.params.get("agent_name")
 
     if not question:
         body = None
@@ -912,6 +915,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             user_email = body.get("user_email")
             to_address = body.get("to_address")
             conversation_id = body.get("conversation_id")
+            agent_name = body.get("agent_name")
         elif body is not None:
             logging.warning(f"send_hr_email: unexpected body type {type(body).__name__}.")
 
@@ -1021,6 +1025,12 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
     # Kept for logging/telemetry readability.
     to_addr = ", ".join(recipients)
 
+    # Optional free-text agent label. Collapse whitespace and cap the length so a
+    # caller-supplied value cannot produce a malformed or oversized subject line.
+    agent_label = re.sub(r"\s+", " ", str(agent_name)).strip() if agent_name else ""
+    if len(agent_label) > 100:
+        agent_label = agent_label[:100].rstrip() + "..."
+
     try:
         # --- Acquire a Microsoft Graph token via the managed identity ---
         credential = DefaultAzureCredential()
@@ -1041,7 +1051,11 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         email_text = "\n".join(body_lines)
 
         message = {
-            "subject": "Benefits question forwarded from the assistant",
+            "subject": (
+                f"[{agent_label}] Benefits question forwarded from the assistant"
+                if agent_label
+                else "Benefits question forwarded from the assistant"
+            ),
             "body": {"contentType": "Text", "content": email_text},
             "toRecipients": [{"emailAddress": {"address": a}} for a in recipients],
         }
@@ -1083,6 +1097,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
                 "conversationId": conversation_id,
                 "hrAddress": to_addr,
                 "graphStatus": status,
+                "agentName": agent_label or None,
             },
             measurements={"recipientCount": len(recipients)},
         )
@@ -1112,6 +1127,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
                 "hrAddress": to_addr,
                 "errorCode": http_err.code,
                 "error": _truncate(detail, 2000),
+                "agentName": agent_label or None,
             },
         )
         return func.HttpResponse(
@@ -1131,6 +1147,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
                 "userId": user_id,
                 "conversationId": conversation_id,
                 "error": _truncate(str(e), 2000),
+                "agentName": agent_label or None,
             },
         )
         return func.HttpResponse(
