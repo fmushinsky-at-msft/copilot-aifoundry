@@ -841,10 +841,159 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         )
 
 
+def post_to_teams_channel(question, user_email, user_full_name=None, user_id=None,
+                          conversation_id=None, agent_label=None):
+    """Post an escalated question to a Teams channel via a Workflows webhook.
+
+    Best-effort and self-disabling: returns None (a no-op) unless every required
+    environment variable is present. Never raises, so a Teams outage or a
+    misconfigured webhook cannot fail the email that has already been sent.
+
+    Required environment variables (all must be set, or this is skipped):
+        - TEAMS_WEBHOOK_URL: the HTTPS URL from the Power Automate "Workflows"
+          flow created against the target channel. Treat as a secret: the 'sig'
+          query parameter grants posting rights to anyone holding the URL.
+        - TEAMS_CHANNEL_NAME: the destination channel, for telemetry/logging only.
+
+    Optional:
+        - TEAMS_WEBHOOK_TIMEOUT: seconds to wait for the webhook (default 10).
+
+    Returns:
+        dict describing the outcome, or None when Teams posting is not configured.
+    """
+    webhook_url = os.environ.get("TEAMS_WEBHOOK_URL", "").strip()
+    channel_name = os.environ.get("TEAMS_CHANNEL_NAME", "").strip()
+
+    # All-or-nothing: skip silently unless fully configured. This keeps the
+    # feature opt-in and avoids half-configured deployments posting nowhere.
+    if not webhook_url or not channel_name:
+        return None
+
+    if not webhook_url.lower().startswith("https://"):
+        logging.warning("TEAMS_WEBHOOK_URL is not an https URL; skipping Teams post.")
+        return None
+
+    try:
+        timeout = float(os.environ.get("TEAMS_WEBHOOK_TIMEOUT", "10"))
+    except ValueError:
+        timeout = 10.0
+
+    who = user_full_name or "An employee"
+    who_line = who + (f" (ID: {user_id})" if user_id else "")
+    heading = f"Question forwarded from [{agent_label}]" if agent_label \
+        else "Question forwarded from Unknown Agent"
+
+    facts = [
+        {"title": "From", "value": who_line},
+        {"title": "Email", "value": user_email or "unknown"},
+    ]
+    if conversation_id:
+        facts.append({"title": "Conversation", "value": conversation_id})
+
+    # Adaptive Card. 'text' is included as a sibling because some Workflows
+    # templates bind to a plain-text field rather than an attachment.
+    plain_text = f"{heading}\n{who_line} ({user_email})\n\n{question}"
+    card = {
+        "type": "message",
+        "text": _truncate(plain_text, 4000),
+        "attachments": [{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "content": {
+                "type": "AdaptiveCard",
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "version": "1.4",
+                "body": [
+                    {"type": "TextBlock", "text": heading, "weight": "Bolder",
+                     "size": "Medium", "wrap": True},
+                    {"type": "TextBlock",
+                     "text": "This question could not be answered by the assistant.",
+                     "isSubtle": True, "wrap": True},
+                    {"type": "FactSet", "facts": facts},
+                    {"type": "TextBlock", "text": "Question", "weight": "Bolder",
+                     "spacing": "Medium", "wrap": True},
+                    {"type": "TextBlock", "text": _truncate(str(question), 4000),
+                     "wrap": True},
+                ],
+            },
+        }],
+    }
+
+    try:
+        data = json.dumps(card).encode("utf-8")
+        request = urllib.request.Request(
+            webhook_url,
+            data=data,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            status = resp.status  # 202 Accepted is typical for Power Automate
+
+        logging.info(f"Teams message posted (status {status}) to channel '{channel_name}'.")
+        track_event(
+            "TeamsMessageSent",
+            properties={
+                "question": _truncate(question),
+                "userEmail": user_email,
+                "userId": user_id,
+                "userName": user_full_name,
+                "conversationId": conversation_id,
+                "channelName": channel_name,
+                "webhookStatus": status,
+                "agentName": agent_label or None,
+            },
+        )
+        return {"posted": True, "channel": channel_name, "status": status}
+
+    except urllib.error.HTTPError as http_err:
+        detail = ""
+        try:
+            detail = http_err.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        logging.error(f"Teams webhook failed: {http_err.code} {detail}")
+        track_event(
+            "TeamsMessageFailed",
+            properties={
+                "question": _truncate(question),
+                "userEmail": user_email,
+                "userId": user_id,
+                "conversationId": conversation_id,
+                "channelName": channel_name,
+                "errorCode": http_err.code,
+                "error": _truncate(detail, 2000),
+                "agentName": agent_label or None,
+            },
+        )
+        return {"posted": False, "channel": channel_name, "error": f"HTTP {http_err.code}"}
+
+    except Exception as teams_err:
+        # Includes timeouts and DNS/TLS failures. Never propagate: the email has
+        # already been delivered and that is the primary escalation path.
+        logging.error(f"Teams webhook error: {teams_err}")
+        track_event(
+            "TeamsMessageFailed",
+            properties={
+                "question": _truncate(question),
+                "userEmail": user_email,
+                "userId": user_id,
+                "conversationId": conversation_id,
+                "channelName": channel_name,
+                "error": _truncate(str(teams_err), 2000),
+                "agentName": agent_label or None,
+            },
+        )
+        return {"posted": False, "channel": channel_name, "error": str(teams_err)}
+
+
 @app.route(route="send_hr_email")
 def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
     """Send a user's unanswered question to HR via Microsoft Graph, using the
     Function's managed identity.
+
+    If the Teams environment variables are configured, the same question is also
+    posted to a Teams channel via a Workflows webhook. That step is best-effort:
+    a Teams failure is recorded in telemetry but does not fail the request.
 
     Request (query string or JSON body):
         - question (required): the user's question to forward
@@ -866,6 +1015,10 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
           Every recipient must match, or the request is rejected with 403.
         - MAX_RECIPIENTS (optional): maximum recipients per request (default 10,
           0 disables the cap).
+        - TEAMS_WEBHOOK_URL + TEAMS_CHANNEL_NAME (optional): when BOTH are set,
+          the question is also posted to that Teams channel. If either is
+          missing, the Teams step is skipped entirely.
+        - TEAMS_WEBHOOK_TIMEOUT (optional): webhook timeout in seconds (default 10).
     """
     logging.info("send_hr_email trigger invoked.")
 
@@ -1040,7 +1193,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         who = user_full_name or "An employee"
         who_line = f"{who}" + (f" (ID: {user_id})" if user_id else "")
         body_lines = [
-            "A user question could not be answered by the Benefits assistant and was forwarded for help.",
+            "A user question could not be answered by the assistant and was forwarded for help.",
             "",
             f"From: {who_line}",
             f"Email: {user_email}",
@@ -1101,12 +1254,30 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             },
             measurements={"recipientCount": len(recipients)},
         )
+
+        # --- Optionally mirror the escalation to a Teams channel ---
+        # Runs only when TEAMS_WEBHOOK_URL and TEAMS_CHANNEL_NAME are both set.
+        # Deliberately after the email has succeeded: the email is the primary
+        # path, and this must never turn a delivered escalation into an error.
+        teams_result = post_to_teams_channel(
+            question=question,
+            user_email=user_email,
+            user_full_name=user_full_name,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            agent_label=agent_label or None,
+        )
+
+        response_body = {
+            "sent": True,
+            "recipients": recipients,
+            "message": "Your question has been emailed to HR."
+        }
+        if teams_result is not None:
+            response_body["teams"] = teams_result
+
         return func.HttpResponse(
-            json.dumps({
-                "sent": True,
-                "recipients": recipients,
-                "message": "Your question has been emailed to HR."
-            }),
+            json.dumps(response_body),
             status_code=200,
             mimetype="application/json",
         )
