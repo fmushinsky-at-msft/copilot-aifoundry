@@ -138,6 +138,26 @@ def _truncate(text, limit=8000):
     return text if len(text) <= limit else text[:limit] + "...[truncated]"
 
 
+def normalize_agent_label(agent_label, limit=100):
+    """Clean a caller-supplied agent display label for telemetry and subject lines.
+
+    'agent_label' is the user-friendly display name (e.g. "HR Benefits Assistant"),
+    as distinct from 'agent_name', which is the internal codename used to look up
+    or create the agent. Only the label is meant for human-facing output.
+
+    Collapses whitespace (a newline in an email subject or Graph header is
+    malformed) and caps the length so an arbitrary caller value cannot produce an
+    oversized dimension. Returns "" when nothing usable was supplied, so callers
+    can pass `label or None` and have the key dropped from custom dimensions.
+    """
+    if not agent_label:
+        return ""
+    label = re.sub(r"\s+", " ", str(agent_label)).strip()
+    if len(label) > limit:
+        label = label[:limit].rstrip() + "..."
+    return label
+
+
 def extract_token_usage(response):
     """Pull token counts out of a Responses API result.
 
@@ -526,7 +546,10 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
     
     Parameters (query string or JSON body):
         - message: User message to send to the agent (required)
-        - agent_name: Name of the agent to create (optional, defaults to 'AssistantAgent')
+        - agent_name: Internal codename of the agent to create/look up (optional, defaults to 'AssistantAgent').
+          Accepted only by this function; recorded as the agentName dimension.
+        - agent_label: User-friendly display name for the agent (optional, e.g. 'HR Benefits Assistant').
+          Recorded as the agentLabel dimension. Accepted by all three functions.
         - instructions: Custom instructions for the agent (optional)
         - threadid: Existing thread ID for conversation continuity (optional)
         - parameters: JSON object with name-value pairs for instruction template substitution (optional)
@@ -542,6 +565,7 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
 
     message = req.params.get('message')
     agent_name = req.params.get('agent_name')
+    agent_label = req.params.get('agent_label')
     instructions = req.params.get('instructions')
     threadid = req.params.get('threadid')
     parameters = None
@@ -581,6 +605,7 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         if req_body:
             message = req_body.get('message')
             agent_name = req_body.get('agent_name')
+            agent_label = req_body.get('agent_label')
             instructions = req_body.get('instructions')
             threadid = req_body.get('threadid')
             parameters = req_body.get('parameters')  # JSON object with name-value pairs
@@ -590,7 +615,7 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps({
                 "error": "Missing required parameter 'message'",
-                "usage": "Provide 'message' in query string or request body. Optional: 'agent_name', 'instructions', 'threadid'"
+                "usage": "Provide 'message' in query string or request body. Optional: 'agent_name', 'agent_label', 'instructions', 'threadid'"
             }),
             status_code=400,
             mimetype="application/json"
@@ -598,6 +623,11 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
 
     # Set defaults
     agent_name = agent_name or "AssistantAgent"
+
+    # Display label for telemetry, recorded separately from the codename above.
+    # Deliberately NOT defaulted to agent_name: leaving it empty makes it visible
+    # in analytics which callers are not yet sending a display label.
+    agent_label = normalize_agent_label(agent_label)
     
     # Handle instruction templates from environment variables
     instruction_template = os.environ.get("AGENT_INSTRUCTIONS_TEMPLATE")
@@ -791,6 +821,7 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         _params = parameters if isinstance(parameters, dict) else {}
         _props = {
             "agentName": agent_name,
+            "agentLabel": agent_label or None,
             "conversationId": response.conversation.id,
             "userId": _params.get("user_id"),
             "userName": _params.get("user_full_name"),
@@ -829,6 +860,7 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
             "AgentInteractionFailed",
             properties={
                 "agentName": agent_name,
+                "agentLabel": agent_label or None,
                 "question": _truncate(message),
                 "error": _truncate(str(e), 2000),
             },
@@ -940,7 +972,7 @@ def post_to_teams_channel(question, user_email, user_full_name=None, user_id=Non
                 "conversationId": conversation_id,
                 "channelName": channel_name,
                 "webhookStatus": status,
-                "agentName": agent_label or None,
+                "agentLabel": agent_label or None,
             },
         )
         return {"posted": True, "channel": channel_name, "status": status}
@@ -962,7 +994,7 @@ def post_to_teams_channel(question, user_email, user_full_name=None, user_id=Non
                 "channelName": channel_name,
                 "errorCode": http_err.code,
                 "error": _truncate(detail, 2000),
-                "agentName": agent_label or None,
+                "agentLabel": agent_label or None,
             },
         )
         return {"posted": False, "channel": channel_name, "error": f"HTTP {http_err.code}"}
@@ -980,7 +1012,7 @@ def post_to_teams_channel(question, user_email, user_full_name=None, user_id=Non
                 "conversationId": conversation_id,
                 "channelName": channel_name,
                 "error": _truncate(str(teams_err), 2000),
-                "agentName": agent_label or None,
+                "agentLabel": agent_label or None,
             },
         )
         return {"posted": False, "channel": channel_name, "error": str(teams_err)}
@@ -1005,8 +1037,9 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
         - user_full_name (optional): who is asking
         - user_id (optional): employee id
         - conversation_id (optional): for traceability
-        - agent_name (optional): which agent produced the escalation; recorded on the
-          telemetry event and included in the email subject
+        - agent_label (optional): user-friendly display name of the agent that
+          produced the escalation (e.g. 'HR Benefits Assistant'). Used in the
+          email subject and recorded on the telemetry event.
 
     Environment variables:
         - HR_ALLOWED_RECIPIENTS (optional): comma/semicolon separated allow-list of
@@ -1029,7 +1062,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
     user_email = req.params.get("user_email")
     to_address = req.params.get("to_address")
     conversation_id = req.params.get("conversation_id")
-    agent_name = req.params.get("agent_name")
+    agent_label = req.params.get("agent_label")
 
     if not question:
         body = None
@@ -1068,7 +1101,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
             user_email = body.get("user_email")
             to_address = body.get("to_address")
             conversation_id = body.get("conversation_id")
-            agent_name = body.get("agent_name")
+            agent_label = body.get("agent_label")
         elif body is not None:
             logging.warning(f"send_hr_email: unexpected body type {type(body).__name__}.")
 
@@ -1178,11 +1211,10 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
     # Kept for logging/telemetry readability.
     to_addr = ", ".join(recipients)
 
-    # Optional free-text agent label. Collapse whitespace and cap the length so a
-    # caller-supplied value cannot produce a malformed or oversized subject line.
-    agent_label = re.sub(r"\s+", " ", str(agent_name)).strip() if agent_name else ""
-    if len(agent_label) > 100:
-        agent_label = agent_label[:100].rstrip() + "..."
+    # Display label used in the email subject and telemetry. Collapse whitespace
+    # and cap the length so a caller-supplied value cannot produce a malformed or
+    # oversized subject line.
+    agent_label = normalize_agent_label(agent_label)
 
     try:
         # --- Acquire a Microsoft Graph token via the managed identity ---
@@ -1250,7 +1282,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
                 "conversationId": conversation_id,
                 "hrAddress": to_addr,
                 "graphStatus": status,
-                "agentName": agent_label or None,
+                "agentLabel": agent_label or None,
             },
             measurements={"recipientCount": len(recipients)},
         )
@@ -1298,7 +1330,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
                 "hrAddress": to_addr,
                 "errorCode": http_err.code,
                 "error": _truncate(detail, 2000),
-                "agentName": agent_label or None,
+                "agentLabel": agent_label or None,
             },
         )
         return func.HttpResponse(
@@ -1318,7 +1350,7 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
                 "userId": user_id,
                 "conversationId": conversation_id,
                 "error": _truncate(str(e), 2000),
-                "agentName": agent_label or None,
+                "agentLabel": agent_label or None,
             },
         )
         return func.HttpResponse(
@@ -1343,6 +1375,8 @@ def submit_feedback(req: func.HttpRequest) -> func.HttpResponse:
         - question (optional): the question being rated
         - conversation_id (optional): correlates with AgentInteraction.conversationId
         - user_id / user_full_name / user_email (optional): who gave the feedback
+        - agent_label (optional): user-friendly display name of the agent the
+          feedback relates to; recorded so feedback can be grouped by agent
     """
     logging.info("submit_feedback trigger invoked.")
 
@@ -1354,6 +1388,7 @@ def submit_feedback(req: func.HttpRequest) -> func.HttpResponse:
     user_id = req.params.get("user_id")
     user_full_name = req.params.get("user_full_name")
     user_email = req.params.get("user_email")
+    agent_label = req.params.get("agent_label")
 
     if not rating:
         body = None
@@ -1390,6 +1425,7 @@ def submit_feedback(req: func.HttpRequest) -> func.HttpResponse:
             user_id = body.get("user_id")
             user_full_name = body.get("user_full_name")
             user_email = body.get("user_email")
+            agent_label = body.get("agent_label")
 
     if not rating:
         logging.warning("submit_feedback: returning 400 - no 'rating' supplied.")
@@ -1429,6 +1465,7 @@ def submit_feedback(req: func.HttpRequest) -> func.HttpResponse:
             "userId": user_id,
             "userName": user_full_name,
             "userEmail": user_email,
+            "agentLabel": normalize_agent_label(agent_label) or None,
             "hasComment": bool(comment and str(comment).strip()),
         }
         if comment and str(comment).strip():
