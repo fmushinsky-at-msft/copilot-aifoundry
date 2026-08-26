@@ -203,7 +203,7 @@ Location: **https://ai.azure.com → project `proj-default` → Agents → PA-He
 For the **agent action** (`agent_httptrigger`), build the HTTP body with the
 `addProperty` pattern instead of hand-typed JSON.
 
-- ☐ Open the flow/action in **Power Automate** (make.powerautomate.com, same environment).
+- ☐ Open the flow/action in **Power Automate** (`gov.flow.microsoft.us` — the GCC portal; the commercial `make.powerautomate.com` will not show your tenant's flows), same environment.
 - ☐ Add a **Compose** action before the **HTTP** action.
 - ☐ In Compose **Inputs**, use an expression like (adjust field sources):
   ```

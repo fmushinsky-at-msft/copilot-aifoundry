@@ -63,10 +63,17 @@ feedback call is what lets you correlate a thumbs-down with the exact question, 
 - ☐ You are a **maker** in the same Power Platform environment as the agent.
 - ☐ **Power Automate Premium** licence (the HTTP action is a premium connector).
 
-> **GCC note:** use the government portals —
-> Copilot Studio: `https://gcc.copilotstudio.microsoft.us`
-> Power Automate: `https://make.gov.powerautomate.us`
-> (Exact hostnames vary by cloud; use whichever your tenant already uses.)
+> **GCC note:** your tenant is Government Community Cloud, so the portals differ from the
+> commercial addresses used in most documentation. These come from Microsoft's
+> [Copilot Studio US Government service URLs](https://learn.microsoft.com/microsoft-copilot-studio/requirements-licensing-gcc#microsoft-copilot-studio-us-government-service-urls)
+> table — they are **not** simple `.com` → `.us` swaps, so don't guess them.
+>
+> | Purpose | Commercial | **Your GCC address** |
+> |---|---|---|
+> | Copilot Studio | `copilotstudio.microsoft.com` | **`gcc.powerva.microsoft.us`** |
+> | Power Automate | `flow.microsoft.com` | **`gov.flow.microsoft.us`** |
+> | Power Platform admin | `admin.powerplatform.microsoft.com` | **`gcc.admin.powerplatform.microsoft.us`** |
+> | Azure Portal | `portal.azure.com` | **`portal.azure.us`** |
 
 ---
 

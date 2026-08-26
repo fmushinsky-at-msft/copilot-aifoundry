@@ -98,13 +98,19 @@ Flow B, which sends the email.
 ### The two websites you will use
 Keep both open in separate browser tabs.
 
-| Website | URL | What it is for |
-|---|---|---|
-| **Copilot Studio** | https://copilotstudio.microsoft.com | Building the agent's conversation logic |
-| **Power Automate** | https://make.powerautomate.com | Building the flow that calls your Azure Function |
+⚠️ **This tenant is GCC.** The addresses below are the **US Government** portals, not the
+commercial ones you will see in most Microsoft documentation. They are **not** simple
+`.com` → `.us` swaps — see
+[Copilot Studio US Government service URLs](https://learn.microsoft.com/microsoft-copilot-studio/requirements-licensing-gcc#microsoft-copilot-studio-us-government-service-urls).
+
+| Website | **Your GCC URL** | Commercial equivalent (do not use) | What it is for |
+|---|---|---|---|
+| **Copilot Studio** | https://gcc.powerva.microsoft.us | `copilotstudio.microsoft.com` | Building the agent's conversation logic |
+| **Power Automate** | https://gov.flow.microsoft.us | `flow.microsoft.com` | Building the flow that calls your Azure Function |
+| **Azure Portal** | https://portal.azure.us | `portal.azure.com` | Copying the function key |
 
 ### Step 0.0 — Open your agent
-1. Go to https://copilotstudio.microsoft.com and sign in with your work account.
+1. Go to https://gcc.powerva.microsoft.us and sign in with your work account.
 2. In the left navigation, click **Agents** (older label: **Chatbots** or **Copilots**).
 3. Click your Benefits agent in the list to open it.
 4. You now see the agent's own left navigation: **Overview**, **Knowledge**, **Tools**,
