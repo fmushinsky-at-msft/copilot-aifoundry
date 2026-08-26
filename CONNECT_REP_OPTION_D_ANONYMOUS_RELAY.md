@@ -26,10 +26,17 @@ Every step says where to click and what you should see afterwards.
 > This document is written for the **[asynchronous response](https://learn.microsoft.com/microsoft-copilot-studio/flow-asynchronous-response)**
 > build, which you have confirmed is available in your environment.
 >
-> With it, the flow can wait hours for a human and then **return the answer to the agent as
-> its own result** — so the answer appears as an ordinary agent reply. This removes the
-> fragile action-ordering rule, the separate proactive-message delivery step, and the
-> requirement that the employee still have the agent installed.
+> With it, the flow can wait for a human and then **return the answer to the agent as its own
+> result** — so the answer appears as an ordinary agent reply. This removes the fragile
+> action-ordering rule, the separate proactive-message delivery step, and the requirement that
+> the employee still have the agent installed.
+>
+> ⚠️ **One thing to validate before rollout.** Async lifts the limit on how long the *flow*
+> runs. Microsoft does not document how long a **callback stays deliverable** to the
+> conversation. Teams threads persist indefinitely and Teams is the only channel with formal
+> callback support, so this most likely works — but it is unverified. Read
+> [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) and test at
+> your intended wait time before promising HR an 8-hour window.
 >
 > ⚠️ **It is off by default on each flow.** You turn it on in
 > [Step D.5](#step-d5--return-the-answer-to-the-agent).
@@ -44,6 +51,7 @@ Every step says where to click and what you should see afterwards.
 - [Background — how the current feature works](#background--how-the-current-feature-works)
 - [How the relay works](#how-the-relay-works)
 - [How asynchronous response shapes this build](#how-asynchronous-response-shapes-this-build)
+- [The unresolved risk — the flow outlives the conversation](#the-unresolved-risk--the-flow-outlives-the-conversation)
 - [Step D.1 — Create the HR intake channel](#step-d1--create-the-hr-intake-channel)
 - [Step D.2 — Create the flow and define its inputs](#step-d2--create-the-flow-and-define-its-inputs)
 - [Step D.3 — Post the card and wait for an answer](#step-d3--post-the-card-and-wait-for-an-answer)
@@ -140,6 +148,49 @@ Separately, Microsoft's
 agent flows are *"billed in Copilot Studio based on usage"* and are *"not included
 entitlements in Power Automate"* — a different axis from connector tiers.
 
+### ⚠️ Copilot Credits — the cost axis that can switch this feature off
+
+Connector tier is not the only thing that can stop this design working. Agent flows consume
+**Copilot Credits**, and running out has a specific, documented consequence:
+
+> *"Once you fully consume your environment's prepaid Copilot Studio capacity, **new agent
+> flow runs are blocked** until capacity is available. Running agent flows complete
+> normally."*
+
+**What this means for your escalation feature specifically:**
+
+| Behaviour | Consequence for you |
+|---|---|
+| New agent flow runs are **blocked** | "Connect to a representative" stops working |
+| The parent agent **keeps working** | The agent still answers normally, so the failure is **partial and easy to miss** |
+| In-progress runs finish | Answers already waiting on a card still get delivered |
+| Resets monthly | The feature may appear to fix itself, masking the cause |
+
+⚠️ **This is a nastier failure than it first appears.** The agent keeps answering questions,
+so nobody reports "the agent is down" — only the escalation path dies, and only for as long
+as capacity is exhausted.
+
+**Cost per escalation.** Each run from a topic consumes **one Classic answer** plus the
+**agent flow actions** it executes. Agent flow actions are billed at **13 Copilot Credits per
+100 actions**, so an individual escalation is cheap — the risk is aggregate consumption across
+*every* agent flow in the environment, not this feature alone.
+
+> 💡 **Two things worth checking before rollout:**
+>
+> 1. **Are your users Microsoft 365 Copilot licensed?** If so, agent flow runs triggered by
+>    **"When an agent calls the flow"** are documented as **no charge** and **exempt from
+>    enforcement** — this whole risk may not apply to you. Confirm it rather than assume it.
+> 2. **Ask your admin whether pay-as-you-go is enabled.** With a PAYG meter linked,
+>    enforcement does not apply. Without one, an exhausted environment silently disables
+>    escalation.
+>
+> Monitor under **Power Platform admin center → Licensing → Copilot Studio → Environments**,
+> in the **Agent flow actions** line of the credit consumption grid.
+
+**Testing does not cost you anything.** Microsoft: *"Testing an agent flow in the flow
+designer or from the agent's test chat doesn't consume Copilot Studio capacity."* So the
+long-wait tests recommended in this guide are free.
+
 ---
 
 ## Background — how the current feature works
@@ -223,8 +274,8 @@ real answer separately through a proactive message.
 > *"Asynchronous flows continue running beyond the previous two-minute limit while still
 > returning a response to the agent after execution completes."*
 
-So the flow can post a card, wait hours for a human, and then hand the answer back to the
-agent as its **own return value**. The agent replies to the employee normally.
+So the flow can post a card, wait for a human, and then hand the answer back to the agent as
+its **own return value**. The agent replies to the employee normally.
 
 ### What this buys you
 
@@ -244,6 +295,101 @@ agent as its **own return value**. The agent replies to the employee normally.
 - **The Responsible AI disclosure.** The reply now looks exactly like an agent answer, so the
   wording must still make clear a human wrote it.
 - **Anonymity.** That still comes from the transport, not from a setting.
+- **The conversation session clock.** This is the important one — see the next section.
+
+### The unresolved risk — the flow outlives the conversation
+
+**Read this before committing to an 8-hour answer window.** It is the one part of this design
+Microsoft's documentation does not answer, and it is worth 30 minutes of testing.
+
+Asynchronous response removes the limit on **how long the flow may run**. It says nothing
+about how long the **conversation** remains able to receive the callback. Nothing in Microsoft's
+documentation states that a callback expires — but nothing states that it doesn't, either.
+
+#### What is actually documented
+
+Be careful with the numbers you may find, because two of the most-cited ones do **not** mean
+what they appear to mean:
+
+| Figure | What it actually governs | Does it limit callback delivery? |
+|---|---|---|
+| **30 min** / **60 min** session rules | *Billed sessions* under the **legacy Power Virtual Agents licence** (withdrawn January 2024). A billing boundary, not a delivery boundary | ❌ No — do not plan around these |
+| **30 min** inactivity | When a **new transcript record** is started, and the default for the optional *inactivity trigger* | ❌ No — affects analytics grouping, not delivery |
+| **30 days** | Maximum agent flow run duration | ✅ Yes — a hard ceiling on the wait |
+| **7 days** | Maximum inactivity-trigger duration | Only if you add inactivity topics |
+
+> ⚠️ **This corrects an earlier reading.** The 30-minute and 60-minute figures come from a
+> [legacy billing article](https://learn.microsoft.com/microsoft-copilot-studio/requirements-sessions-management)
+> that carries a note limiting it to a licence no longer sold. They describe when Microsoft
+> stops counting a session for billing — not when Teams stops accepting a message. Treating
+> them as delivery deadlines would be wrong.
+
+#### What points toward this working
+
+The evidence is actually reasonably encouraging for your specific setup:
+
+- **Teams is the one channel with formal callback support.** Microsoft: the callback feature
+  *"is fully supported in Microsoft Teams"*, while other channels *"aren't formally tested."*
+- **Teams conversations do not expire.** Microsoft's Teams deployment guidance states threads
+  persist *"indefinitely"* and that the conversation *"never truly 'ends' from Teams'
+  perspective"* — the article treats this persistence as a **problem** to manage (stale
+  context, token expiry), which only makes sense if long-lived threads are the norm.
+- **Microsoft anticipates users messaging mid-wait.** The documented behaviour — *"the flow
+  runs to completion, but the agent responds to the user's latest request"* — describes a wait
+  long enough for the user to get bored and do something else.
+
+#### What remains genuinely unknown
+
+- **No stated callback lifetime.** No Microsoft document gives a maximum age for an async
+  callback.
+- **No published example resembles your use case.** Every async example is a long-running
+  *process*; none is a multi-hour wait on a human.
+- **Token expiry is a documented risk over long threads.** The Teams guidance explicitly lists
+  *"connectors can expire during long sessions"*. Your agent uses **Authenticate with
+  Microsoft**, so a stale token could affect the turn that delivers the answer.
+
+#### Realistic outcomes
+
+| Outcome | Likelihood | Employee experience |
+|---|---|---|
+| Callback delivers into the persistent Teams thread | **Most likely** | ✅ Works as this guide describes |
+| Callback delivers, but topic variables were reset | Possible | ⚠️ Answer appears, possibly without the surrounding wording |
+| Callback dropped after some undocumented expiry | **Least likely, but unverified** | ❌ **Silent failure** — flow shows Succeeded, employee gets nothing |
+
+The last row is the one to design against — not because it is probable, but because **the
+flow run history will report success either way**. Nothing would alert you.
+
+#### The test that settles it
+
+Cheap, and it converts an unknown into a fact:
+
+1. Build the flow as described.
+2. Escalate a question from your own account.
+3. **Do not touch the chat.** Leave it completely idle.
+4. Answer the card after **90 minutes**, then repeat at your real target (4–8 hours).
+5. Confirm the answer arrives, and check the run history either way.
+
+**Do this before briefing HR**, because the result determines what you can promise. Test at
+the duration you intend to promise — a passing 90-minute test does not prove 8 hours.
+
+#### If the long wait does not survive
+
+Three fallbacks, in order of preference:
+
+1. **Shorten the promise.** Set the card timeout to `PT30M`–`PT2H` and staff the channel
+   during business hours. Pair this with the operating-hours check described under
+   [Pros and cons](#pros-and-cons).
+2. **Deliver by proactive message instead** — [Variant D1](#-variant-d1--let-the-agent-confirm-instantly-instead).
+   Proactive messages are explicitly designed to reach a user *outside* an active
+   conversation. The cost is the agent-installed prerequisite and the analytics blind spot.
+3. **Send the answer by email**, reusing the pattern your `send_hr_email` feature already
+   proves works.
+
+> 💡 **A belt-and-braces option if this feature is business-critical.** Return the answer to
+> the agent **and** send a proactive message. If the callback lands, the employee sees it
+> immediately; if it is ever dropped, the proactive message still reaches them. The cost is an
+> occasional duplicate — cheaper than a silently lost answer. Worth it only if you cannot
+> tolerate the failure; otherwise test first and keep the build simple.
 
 ### Channel support
 
@@ -314,9 +460,9 @@ private here will cost you hours of debugging.
 
 | Input | Carries |
 |---|---|
-| `Question` | What the employee asked |
-| `UserEmail` | Identifies the asker to HR (shown on the card) |
-| `UserName` | Shown to HR only |
+| `Question` | What the employee asked — **shown on the card** |
+| `UserEmail` | Identifies the asker; used for telemetry and any email fallback |
+| `UserName` | Who asked — **shown on the card** |
 | `ConversationId` | Correlation for telemetry |
 
 > **Action names have changed over time.** The current names are **When an agent calls the
@@ -452,8 +598,16 @@ timeout, an unanswered question hangs for 30 days and the employee is never told
 2. Set **Timeout** to an ISO 8601 duration — `PT8H` means 8 hours.
 3. Click **Done**.
 
-You will branch on this in the next step: the same **Respond to the agent** action returns
-either the real answer or a timeout message, so the employee always hears something back.
+⚠️ **Do not treat `PT8H` as settled until you have tested it at that duration.** The flow will
+wait 8 hours, but callback deliverability over long waits is undocumented. See
+[The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation). If the test
+fails, fall back to `PT30M`–`PT2H` with business-hours staffing.
+
+> ⚠️ **Important: a timed-out card action does not "continue" — it fails.** Power Automate
+> reports `OperationTimedOut`, and by default **every following action is skipped**. If you
+> stop here, a timed-out escalation leaves the employee waiting forever with no message at
+> all. [Step D.5](#step-d5--return-the-answer-to-the-agent) adds the branch that prevents
+> this, and it is not optional.
 
 ✅ **Checkpoint:** the card action has an explicit timeout shorter than 30 days.
 
@@ -470,13 +624,27 @@ speaks it.
 1. Add a **Respond to the agent** action at the **end** of the flow (search the **Copilot**
    connector).
 2. Add one text output named `Answer`.
-3. Set its value to the **`answer`** token from the card action, using the lightning-bolt
-   picker.
+3. Set its value to text that **discloses a human wrote it**, with the card's `answer` token
+   embedded — use the lightning-bolt picker to insert the token:
+
+   ```
+   HR has answered your question:
+
+   <the "answer" output from the adaptive card>
+
+   If you need more help, just ask me again.
+   ```
 
 > ⚠️ **`answer` is the typed text; `submitActionId` is the button.** Microsoft's card
 > documentation notes that `submitActionId` holds *"the `title` of the action the user
 > selected."* That tells you **which button** was pressed, not what was written. You want
 > **`answer`**.
+
+⚠️ **Do not soften "HR has answered your question."** Microsoft's Responsible AI guidance
+requires that agents *"make clear when the user is interacting with an agent and when they're
+receiving a response from a human."* Hiding **who** answered is fine; obscuring **that a
+human answered** is not. This matters *more* under async, because the reply now looks exactly
+like an ordinary agent answer.
 
 ### Turn on Asynchronous response
 
@@ -495,37 +663,44 @@ speaks it.
 
 ### Handle the timeout branch
 
-7. Add a **Condition** (or configure a second **Respond to the agent** on the card action's
-   **has timed out** path) so the employee is told when nobody answers:
+Because a timed-out card action **fails**, the success path above is skipped when nobody
+answers. You need a second response action that runs *only* on that path.
 
-   > `Nobody from HR answered within 8 hours. Your question has been recorded and someone will follow up with you by email.`
+7. Add a **second Respond to the agent** action.
+8. Click its **…** menu → **Configure run after**.
+9. Tick **has timed out** and **has failed**; untick **is successful**.
+10. Give it the **same output name** — `Answer` — with a timeout message as its value:
+
+    > `Nobody from HR answered within 8 hours. Your question has been recorded and someone will follow up with you by email.`
+
+11. Turn **Asynchronous response** **On** for this action too.
+12. Rename the flow to `Anonymous HR Relay` and click **Save**.
+
+Flow shape:
+
+```
+Post adaptive card AND WAIT
+    |
+    +-- (is successful) ----► Respond to the agent  [async On]
+    |                          Answer = "HR has answered..." + <answer token>
+    |
+    +-- (has timed out /
+         has failed) --------► Respond to the agent  [async On]
+                               Answer = "Nobody answered..."
+```
 
 > ⚠️ **Every branch must respond, and with the same outputs.** Microsoft: the response action
 > *"can be used at multiple branches in the flow, but must have the same outputs at each
-> usage."* A branch that ends without responding leaves the employee waiting forever.
+> usage."* Both actions must expose an output named `Answer` — a mismatch causes
+> `FlowActionBadRequest` when Copilot Studio maps the result.
 
-### Compose the answer text
+> 💡 **Why tick "has failed" as well as "has timed out."** A card action can fail for reasons
+> other than a timeout — a deleted channel, a permissions change. Without this, those failures
+> also leave the employee waiting silently.
 
-8. Rather than returning the bare answer, return text that discloses a human wrote it:
-
-   ```
-   HR has answered your question:
-
-   <the "answer" output from the adaptive card>
-
-   If you need more help, just ask me again.
-   ```
-
-⚠️ **Do not soften "HR has answered your question."** Microsoft's Responsible AI guidance
-requires that agents *"make clear when the user is interacting with an agent and when they're
-receiving a response from a human."* Hiding **who** answered is fine; obscuring **that a
-human answered** is not. This matters *more* under async, because the reply now looks exactly
-like an ordinary agent answer.
-
-✅ **Checkpoint:** the flow ends with **Respond to the agent**, **Asynchronous response** is
-**On**, the `Answer` output carries the `answer` token, and the timeout path responds too.
-
-9. Rename the flow to `Anonymous HR Relay` and click **Save**.
+✅ **Checkpoint:** the flow ends with **two** `Respond to the agent` actions — one on success,
+one on timeout/failure — both with **Asynchronous response On** and both exposing an output
+named `Answer`.
 
 ---
 
@@ -542,10 +717,10 @@ like an ordinary agent answer.
 | `UserName` | `System.User.DisplayName` |
 | `ConversationId` | `System.Conversation.Id` |
 
-⚠️ **`UserEmail` and `UserName` identify the asker to HR.** If the agent is not
-authenticated, `System.User.PrincipalName` is empty and HR sees an anonymous question they
-often cannot answer correctly. This is the same dependency your `send_hr_email` feature
-already has.
+⚠️ **`UserName` is what HR actually sees on the card.** If the agent is not authenticated,
+`System.User.DisplayName` and `System.User.PrincipalName` are both empty — HR gets an
+anonymous question they often cannot answer correctly, and your telemetry loses the join key.
+This is the same authentication dependency your `send_hr_email` feature already has.
 
 > **Why `PrincipalName` and not `Email`?** Both exist, but your other flows already use
 > `System.User.PrincipalName` (see `EMAIL_HR_DEPLOYMENT_CHECKLIST.md`, Section 9). Staying
@@ -590,6 +765,29 @@ the `Answer` output when it eventually returns.
 
 ⚠️ Verify the last point deliberately. Click the sender, open the profile, and confirm it
 resolves to the agent and not to a person.
+
+### ⚠️ The test that actually decides the design
+
+Everything above proves the mechanism works over a *short* wait. This one proves whether it
+survives a **realistic** wait — and it is the difference between a feature that works and one
+that silently loses answers.
+
+1. Escalate a question from your own account.
+2. **Leave the chat completely idle.** Do not send the agent anything.
+3. Wait **90 minutes**.
+4. Answer the card.
+5. Check whether the answer arrives in Teams.
+6. **Repeat the whole test at your real target duration** (4–8 hours). A passing 90-minute
+   test does not prove 8 hours.
+
+| Result | What it means | What to do |
+|---|---|---|
+| Answer arrives normally | ✅ The persistent Teams thread carries the callback | Proceed; retest at your real target duration |
+| Answer arrives but looks odd or bare | ⚠️ Callback delivered, topic context reset | Put the full disclosure wording in the **flow's** output, not the topic |
+| Nothing arrives; flow shows Succeeded | ❌ **Silent failure** | Do not roll out at 8 hours — use one of the fallbacks in [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) |
+
+⚠️ **Check the flow run history either way.** A run marked Succeeded while the employee
+received nothing is exactly the failure mode to watch for, and it will not announce itself.
 
 ### Also test the interruption case
 
@@ -646,6 +844,13 @@ other way — a **proactive Teams message**, documented in
 > the analytics blind spot that asynchronous response exists to remove. It is worth knowing
 > only if you later need the agent free to do other work the instant the question is filed.
 
+> 💡 **But keep D1 in your back pocket.** If the long-wait test in
+> [Step D.7](#step-d7--publish-and-test-end-to-end) shows callbacks are *not* delivered after
+> several hours, D1 becomes the **recommended** shape rather than a curiosity — proactive
+> messages are explicitly designed to reach a user outside an active conversation, which is
+> exactly the failure mode in question. See
+> [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation).
+
 ⚠️ If you do build D1, `Post as` must **never** be `User` — that sends the message as the
 account signed in to the Teams connector, usually the flow owner, and anonymity is lost
 immediately.
@@ -654,7 +859,7 @@ immediately.
 
 ## 🆕 Variant D2 — the native "Request for information" action
 
-Copilot Studio has a **built-in action** that does most of what Steps D.4–D.5 build by hand:
+Copilot Studio has a **built-in action** that does most of what Steps D.3–D.4 build by hand:
 **[Request for information (RFI)](https://learn.microsoft.com/microsoft-copilot-studio/flows-request-for-information)**,
 under **Human review** in the agent-flow designer.
 
@@ -663,20 +868,32 @@ their answers as dynamic content. Configure a **Title**, **Message**, **Assigned
 typed inputs (Text, Yes/No, Email, Number, Date — with optional fields, placeholder text, and
 single- or multi-select dropdowns).
 
-| | Card build (Steps D.4–D.5) | **RFI action (D2)** |
+| | Card build (Steps D.3–D.4) | **RFI action (D2)** |
 |---|---|---|
 | Where HR responds | Teams channel card | **Outlook email** |
 | Setup effort | Hand-written JSON, timeout branch | A few fields in the designer |
 | Typed/validated inputs | Manual | ✅ Built in |
 | Shared visible queue | ✅ Whole channel sees it | ❌ Individual emails |
 | First response wins | ✅ | ✅ |
-| Anonymity to the employee | ✅ (delivery step unchanged) | ✅ (delivery step unchanged) |
+| Anonymity to the employee | ✅ The answer returns as the flow's value | ✅ Same — [Step D.5](#step-d5--return-the-answer-to-the-agent) is unchanged |
+| Works with async response | ✅ | ⚠️ **Unverified** — see below |
 
 ⚠️ **Constraints Microsoft states explicitly:**
 - *"All requests are currently sent via **Outlook only**."*
 - *"Requests **can't be sent to users outside of your tenant**."*
 - **Known issue:** outputs can come back wrapped in `{{ }}` — *"ensure that input names are
   configured without spaces."*
+
+> ⚠️ **The same long-wait question applies to D2, and is equally untested.** An RFI pauses the
+> flow waiting on a human, exactly as the card does, so it depends on the same asynchronous
+> callback surviving the wait. Choosing D2 does **not** sidestep
+> [the unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) — test it the
+> same way.
+
+> ⚠️ **D2 changes who HR's reply is visible to, not who the employee sees.** The employee still
+> receives the answer from the agent, so anonymity holds. But an emailed RFI is addressed to
+> named individuals, so **HR loses the shared queue** — nobody else sees that a question is
+> outstanding or already handled.
 
 > **Which to choose?** If HR lives in Outlook and you want the simplest build, D2 is less work
 > and gives validated inputs for free. If you want a **visible shared queue** the whole HR team
@@ -710,9 +927,11 @@ single- or multi-select dropdowns).
 
 | Limitation | Consequence |
 |---|---|
+| **Callback delivery over long waits is unverified** | Microsoft documents no callback expiry, but also no guarantee. Evidence favours it working in Teams. **Test at your intended wait time before rollout** — see [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) |
+| **Failure is silent if it does occur** | The flow run reports Succeeded even if the employee never receives the answer |
 | **Depends on Asynchronous response** | Requires an environment on the new Power Automate infrastructure; the toggle is **off by default on every flow** |
+| **Capacity exhaustion disables escalation silently** | Agent flow runs are blocked while the agent keeps answering — a partial outage nobody reports. See [Copilot Credits](#️-copilot-credits--the-cost-axis-that-can-switch-this-feature-off) |
 | **Not portable to all channels** | Callbacks are unsupported on **Microsoft 365 Copilot and telephony**; fine for Teams |
-| **Long-wait callbacks are lightly documented** | Microsoft's examples are long-running *processes*, not multi-hour human waits — test before rollout |
 | One round trip per card | No follow-up question in the same thread |
 | First response wins | Later submissions ignored |
 | Card submits once | A rep cannot revise an answer |
@@ -788,9 +1007,12 @@ a proactive message, it is **not** subject to the *"proactive messages don't app
 conversation transcripts or analytics session data"* limitation. Copilot Studio analytics will
 see the conversation.
 
-You still want your own event if you need escalation counts, timeout rates, or wait times in
-the **same Power BI dashboard** as your existing five events — Copilot Studio analytics and
-App Insights are separate places to look.
+⚠️ **But telemetry is your only detector for the silent-failure mode.** If a callback is ever
+dropped because the conversation closed, the flow still reports success and nothing surfaces
+the loss. Emitting an event when an escalation is **raised**, and a second when an answer is
+**returned**, lets you reconcile the two counts. A persistent gap between them is the signal
+that answers are being lost — see
+[The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation).
 
 ### Two ways to do it
 
@@ -852,6 +1074,11 @@ customEvents
 | `Error code: 3000` | Async is On but the environment is on old infrastructure | Same check as above; if `LogicApps`, async is unavailable |
 | Employee never gets a reply, flow still running | No response action on the branch that ran | Every branch must end in **Respond to the agent** with the same outputs |
 | Answer arrives blank | Returned `submitActionId` instead of `answer` | Map the `Answer` output to the **`answer`** token |
+| Answer never arrives after a long wait; run shows Succeeded | Possible callback expiry — undocumented | Test at your target duration; see [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) |
+| Escalation stops working but the agent still answers normally | **Copilot Studio capacity exhausted** — new agent flow runs are blocked while the parent agent keeps working | Check **Agent flow actions** in the Power Platform admin center; reallocate credits or enable pay-as-you-go |
+| Nobody answered and the employee got no message at all | Timeout branch missing or **Configure run after** not set | Add the second response action on **has timed out / has failed** ([Step D.5](#step-d5--return-the-answer-to-the-agent)) |
+| Auth prompt or failure on the delivering turn | **Connector tokens can expire during long Teams threads** | Documented Teams risk; have the employee reauthenticate, or shorten the wait window |
+| Agent behaves oddly in a long-lived thread | Teams keeps conversation history indefinitely; context accumulates | `/debug clearstate` in the Teams chat resets conversation state |
 | Card posts, but buttons error | Used the plain "post" action | Use **"…and wait for a response"** |
 | Card never appears | Private channel, or Workflows app not enabled | Use a **standard** channel; check the Workflows app in Teams admin center |
 | Card looks unanswered after submitting | **Update message** not configured | Set **Update message** ([Step D.3](#step-d3--post-the-card-and-wait-for-an-answer)) |
@@ -887,6 +1114,19 @@ after execution completes."* Without that setting the run would fail with
 The feature breaks immediately — the flow will fail about 100 seconds after each escalation.
 It is a per-flow setting, so anyone editing the flow can affect it. Worth noting in your
 runbook.
+
+**Q: The flow can run for 30 days — so can a rep answer 3 days later?**
+The flow will still be running, and Microsoft documents no expiry on the callback. But it also
+gives no guarantee, and no published example waits that long on a human. Teams threads persist
+indefinitely, which is encouraging, but treat multi-day waits as unproven until you test them.
+Be wary of one trap: the widely-quoted "30-minute" and "60-minute" session figures come from a
+**legacy billing article** and describe billed sessions, not message delivery. See
+[The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation).
+
+**Q: How would we even know if answers were being lost?**
+You would not, from the flow alone — a dropped callback still reports a successful run. That
+is the strongest argument for adding the telemetry event and reconciling "escalations raised"
+against "answers delivered."
 
 **Q: Does the employee have to keep the agent installed for the answer to arrive?**
 No — and that is one of the main advantages here. The answer returns as the flow's own result
@@ -968,6 +1208,8 @@ real.
 |---|---|
 | [**Asynchronous response support for agent flows**](https://learn.microsoft.com/microsoft-copilot-studio/flow-asynchronous-response) | ⭐ **The basis of this build** — enabling the toggle, Teams callback support, behaviour without support |
 | [**Power Automate environments move to new architecture**](https://learn.microsoft.com/power-automate/environment-architecture) | **The environment prerequisite**; how to check `environmentFlowHostingType` |
+| [Manage sessions and capacity](https://learn.microsoft.com/microsoft-copilot-studio/requirements-sessions-management) | ⚠️ **Legacy PVA billing article** — its 30/60-minute figures are *billing* boundaries, not delivery limits. Cited here only to warn against misreading them |
+| [Deploy agents in Microsoft Teams](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deploy-agent-teams) | Teams persistent-conversation model; stale context over long-lived threads |
 | [Create an agent flow as a tool](https://learn.microsoft.com/microsoft-copilot-studio/advanced-flow-create) | **100-second limit**; actions after the response run up to 30 days |
 | [Modify an existing flow to use with an agent](https://learn.microsoft.com/microsoft-copilot-studio/flow-modify-use-with-agent) | Required trigger/response action; response must return the **same outputs at every branch** |
 | [Request for information (RFI)](https://learn.microsoft.com/microsoft-copilot-studio/flows-request-for-information) | **Variant D2** — native pause-and-ask-a-human |
@@ -1086,6 +1328,9 @@ Every non-obvious claim traces to one of these. All verified to resolve.
 - [Modify an existing flow to use with an agent](https://learn.microsoft.com/microsoft-copilot-studio/flow-modify-use-with-agent) — trigger/response actions; async **Off**; `Error code: 3000`
 - [Asynchronous response support for agent flows](https://learn.microsoft.com/microsoft-copilot-studio/flow-asynchronous-response) — **the basis of this build**; enabling the toggle; Teams supported; M365 Copilot and telephony not; behaviour without support
 - [Power Automate environments move to new architecture](https://learn.microsoft.com/power-automate/environment-architecture) — SelfHost Multitenant requirement; `environmentFlowHostingType` check
+- [Manage sessions and capacity](https://learn.microsoft.com/microsoft-copilot-studio/requirements-sessions-management) — **legacy Power Virtual Agents billing**; the 30-minute and 60-minute figures define *billed sessions*, **not** message delivery. Listed to prevent misreading them as callback deadlines
+- [Inactivity trigger](https://learn.microsoft.com/microsoft-copilot-studio/guidance/inactivity-trigger-guidance) — new transcript record after 30 minutes idle; **Teams persistent-conversation model**; 7-day timer ceiling
+- [Deploy agents in Microsoft Teams](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deploy-agent-teams) — Teams threads persist *"indefinitely"*; stale context and token expiry over long conversations
 - [New Power Automate infrastructure](https://learn.microsoft.com/power-automate/environment-architecture) — environment requirement for async
 - [Request for information (RFI)](https://learn.microsoft.com/microsoft-copilot-studio/flows-request-for-information) — **Outlook only; first response wins; no external users; `{{ }}` known issue**
 - [Multistage and AI approvals](https://learn.microsoft.com/microsoft-copilot-studio/flows-advanced-approvals) — staged approval gates
