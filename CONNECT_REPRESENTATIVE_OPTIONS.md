@@ -81,7 +81,7 @@ it changes, revisit the recommendations.
 | User identity variable | **`System.User.PrincipalName`** | What your existing flows already pass as `user_email` |
 | Function App | `func-hrbenefit-dev003` (Flex Consumption, Python) | Three routes; no change needed for any option |
 | Existing escalation | "Email HR" via `send_hr_email` | You are adding a *second* choice beside it |
-| Licensing | Power Automate Premium already in use | Options C and D need no new licence |
+| Licensing | `send_hr_email` requires **Power Automate Premium** (it uses the HTTP action) | Options C and D use the **standard** Teams connector — may need no new licence. **Verify** |
 
 ### ⚠️ A conflict you must know about before choosing Option B
 
@@ -111,6 +111,7 @@ risk that must be in the plan. Options A, C and D do not touch authentication at
   - [What "connect a representative" can actually mean](#what-connect-a-representative-can-actually-mean)
   - [The options at a glance](#the-options-at-a-glance)
   - [What your GCC tenant allows](#what-your-gcc-tenant-allows)
+  - [A note on Power Automate licensing](#a-note-on-power-automate-licensing)
   - [Decision guide](#decision-guide)
 - [Background — how the current feature works](#background--how-the-current-feature-works)
 - [Part A — Teams deep link to a group chat](#part-a--teams-deep-link-to-a-group-chat)
@@ -162,7 +163,7 @@ other end.
 | Live or async? | Near-live (a real Teams chat) | **Live** | **Async** | Async (minutes) |
 | **Hides rep identity** | ❌ **Impossible** | ✅ (nickname; 2 leaks) | ✅ | ✅ |
 | Reply reaches the user | ✅ | ✅ | ❌ | ✅ |
-| New licences | **None** | D365 Customer Service / Contact Center | Power Automate Premium (already have) | Power Automate Premium (already have) |
+| New licences | **None** | D365 Customer Service / Contact Center | Likely none — Teams connector is standard ([verify](#a-note-on-power-automate-licensing)) | Likely none — Teams connector is standard ([verify](#a-note-on-power-automate-licensing)) |
 | New Azure resources | **None** | None (D365 side only) | None | None |
 | Code changes | **None required** | None required | None required | None required |
 | Build time | ~30 min | Days to weeks | ~45 min | ~2 hours |
@@ -213,6 +214,36 @@ addresses. This is why the deep link in Option A works for you unchanged.
 > `CUSTOM_FEEDBACK_SETUP_GUIDE.md` in this repo — cite
 > `gcc.copilotstudio.microsoft.us` and `make.gov.powerautomate.us`. Neither appears in
 > Microsoft's official table. Use the values above.
+
+### A note on Power Automate licensing
+
+Earlier drafts of this document asserted that you *"already have Power Automate Premium."*
+**That was an assumption, not a verified fact**, and it is corrected here.
+
+What is actually known:
+
+- `COPILOT_STUDIO_SETUP_GUIDE.md` states the **HTTP** action is a **premium connector** and
+  lists Power Automate Premium as a licence you **need to obtain** — written as a
+  prerequisite, not a confirmation that it was granted.
+- If `send_hr_email` works in production today, *somebody* has that licence. Who, and
+  whether it covers the account that will run a new flow, is unverified.
+
+**Why this matters in your favour:**
+
+| Feature | Action | Connector tier |
+|---|---|---|
+| `send_hr_email` (existing) | **HTTP** | **Premium** |
+| Options C and D | Teams: post message / post card and wait | **Standard** |
+
+The new options use the **standard Teams connector**, so they may need **no new licence at
+all** — a better position than "you already pay for Premium."
+
+⚠️ **Verify before budgeting either way.** Open the flow designer and look for a **Premium**
+badge on the actions you intend to use; no badge means no premium requirement for that
+action. Note separately that Microsoft's
+[Agent flows FAQ](https://learn.microsoft.com/microsoft-copilot-studio/flows-faqs) says agent
+flows are *"billed in Copilot Studio based on usage"* and are *"not included entitlements in
+Power Automate"* — a different axis from connector tiers.
 
 ### Decision guide
 
@@ -620,7 +651,6 @@ signals suggesting caution:
 - In the classic Teams plan, triggering **Escalate ends the conversation.**
 
 **Therefore: do not buy licences or plan a rollout until you have run Step B.1.**
-
 > ### 🔧 Microsoft has an official sample that solves exactly this problem
 >
 > **[Copilot Studio Handover To Live Agent Sample](https://github.com/microsoft/CopilotStudioSamples/tree/main/contact-center/skill-handoff)**
@@ -875,7 +905,8 @@ architectural risk in Step B.1.
 Microsoft's own HR agent tutorial.
 
 **Time required:** about 45 minutes.
-**Cost:** Power Automate Premium — which you already have (used by `send_hr_email`).
+**Cost:** likely none — this uses the **standard** Teams connector, not the premium HTTP
+action. See [A note on Power Automate licensing](#a-note-on-power-automate-licensing).
 
 ⚠️ **This is asynchronous.** The user is told "HR has been notified." Nobody is waiting on
 the other end. Word the confirmation message honestly or you will create false
@@ -995,7 +1026,7 @@ question, and the user saw the confirmation.
 | Advantage | Detail |
 |---|---|
 | Microsoft's own pattern | This is what the official Teams quickstart teaches |
-| No new licence | Uses the Power Automate Premium you already have |
+| Likely no new licence | Uses the **standard** Teams connector, not the premium HTTP action |
 | Anonymous by default | Posting as Flow bot names nobody |
 | Visible shared queue | The whole team sees the backlog |
 | Simple to reason about | One flow, one action, easy to debug |
@@ -1033,7 +1064,8 @@ card. A representative types an answer into the card. The **Flow bot** delivers 
 back to the employee as a direct message. The employee never learns who wrote it.
 
 **Time required:** about 2 hours.
-**Cost:** none beyond Power Automate Premium, which you already use for `send_hr_email`.
+**Cost:** likely none — the Teams connector actions used here are **standard**. See
+[A note on Power Automate licensing](#a-note-on-power-automate-licensing).
 **Prerequisites:** maker access to the agent, and permission to create a Teams channel.
 
 > **This is the recommended option when anonymity is required.** It is the only approach
@@ -1525,7 +1557,7 @@ text, and single- or multi-select dropdowns).
 | **Anonymous by design** | Anonymity comes from the transport, not a setting that can fail open |
 | **Closes the loop** | Unlike C, the answer reaches the employee |
 | **Answer can arrive from the agent** | Officially documented proactive-message pattern; lands in the same chat |
-| No new licence | Uses existing Power Automate Premium |
+| Likely no new licence | Teams connector actions are standard, not premium |
 | No code change | `function_app.py` untouched |
 | No authentication change | Keeps "Authenticate with Microsoft" — `send_hr_email` unaffected |
 | Human answers, bot delivery | Real expertise, no identity exposure |
@@ -1978,13 +2010,37 @@ Collected from the concerns that typically surface when this feature is proposed
 ### Cost and licensing
 
 **Q: Which options cost money?**
-Only B. A, C and D use what you already own. B needs a Dynamics 365 Customer Service or
-Contact Center licence *per representative*.
+Only B is certain to. B needs a Dynamics 365 Customer Service or Contact Center licence
+*per representative*. A needs nothing. C and D use the **standard** Teams connector and may
+need no new licence — see [A note on Power Automate licensing](#a-note-on-power-automate-licensing)
+and verify rather than assume.
 
 **Q: Do we need Power Automate Premium for C and D?**
-You already have it — `send_hr_email` uses the premium HTTP action. C and D use the Teams
-connector, which is standard, so they may not even need premium. Confirm before assuming a
-new cost.
+**Probably not — but verify rather than assume.** The distinction is which *connector* an
+action belongs to:
+
+| Feature | Action used | Connector tier |
+|---|---|---|
+| `send_hr_email` (existing) | **HTTP** | **Premium** |
+| Option C | Post message in a chat or channel | **Standard** (Teams) |
+| Option D | Post adaptive card + wait; Post message | **Standard** (Teams) |
+| Variant D2 | Request for information | Part of agent flows — see below |
+
+So C and D may need **no new licence at all**, which is a better position than this document
+originally implied.
+
+⚠️ **Two things to check before relying on that:**
+
+1. **Does the flow-running account already have Premium?** `COPILOT_STUDIO_SETUP_GUIDE.md`
+   lists it as a *prerequisite to obtain* for the email feature — it does not confirm it was
+   granted. If the email feature works today, someone has it; confirm who.
+2. **Agent flows bill differently.** Microsoft's
+   [Agent flows FAQ](https://learn.microsoft.com/microsoft-copilot-studio/flows-faqs) states
+   agent flows are *"billed in Copilot Studio based on usage"* and are *"not included
+   entitlements in Power Automate"* — a separate consideration from connector tiers.
+
+**How to check in 30 seconds:** open the flow designer and look for a **Premium** badge on
+the actions you plan to use. No badge means no premium licence needed for that action.
 
 **Q: Is there a per-message cost?**
 Copilot Studio bills by message/session depending on your plan. Options C and D add *flow
