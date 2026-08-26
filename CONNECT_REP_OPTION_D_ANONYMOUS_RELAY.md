@@ -60,16 +60,15 @@ Every step says where to click and what you should see afterwards.
 - [Step D.6 — Wire the flow into the topic](#step-d6--wire-the-flow-into-the-topic)
 - [Step D.7 — Publish and test end to end](#step-d7--publish-and-test-end-to-end)
 - [Step D.8 — Brief the representatives](#step-d8--brief-the-representatives)
-- [🆕 Variant D1 — let the agent confirm instantly instead](#-variant-d1--let-the-agent-confirm-instantly-instead)
-- [🆕 Variant D2 — the native "Request for information" action](#-variant-d2--the-native-request-for-information-action)
+- [Alternatives worth knowing about](#alternatives-worth-knowing-about)
 - [Pros and cons](#pros-and-cons)
 - [Anonymity — what it does and does not protect](#anonymity--what-it-does-and-does-not-protect)
+- [Making it clear which answers came from a person](#making-it-clear-which-answers-came-from-a-person)
 - [Optional — Add telemetry so Power BI stays complete](#optional--add-telemetry-so-power-bi-stays-complete)
 - [Troubleshooting](#troubleshooting)
 - [Technical questions you are likely to be asked](#technical-questions-you-are-likely-to-be-asked)
-- [Reference material](#reference-material)
+- [References](#references)
 - [Glossary](#glossary)
-- [Sources](#sources)
 
 ---
 
@@ -79,16 +78,15 @@ Every step says where to click and what you should see afterwards.
 
 1. Read [How asynchronous response shapes this build](#how-asynchronous-response-shapes-this-build).
    It explains the one setting the whole design depends on.
-2. Decide between the Adaptive Card build (Steps D.1–D.8) and
-   [Variant D2](#-variant-d2--the-native-request-for-information-action), which uses a
-   built-in action and Outlook instead of a channel card.
+2. Build Steps D.1–D.8. If HR would rather answer from Outlook than a Teams channel, see
+   [Alternatives worth knowing about](#alternatives-worth-knowing-about) first.
 
 ### What to skip on a first read
 
-- **[Reference material](#reference-material)** — a library, not reading material.
+- **[References](#references)** — Tier 1 is worth reading before you build; Tiers 2–8 are
+  there for when you hit a specific problem.
 - **[Technical questions](#technical-questions-you-are-likely-to-be-asked)** — for when you
   present this to others.
-- **[Sources](#sources)** — provenance, for auditing rather than learning.
 
 > ⚠️ **Build it against a test channel and your own account first.** Only point it at the
 > real HR channel once the end-to-end test passes.
@@ -265,9 +263,7 @@ Everything in this design rests on one setting. Understand it before you build.
 ### The problem it solves
 
 An agent flow normally must **respond to the agent within 100 seconds**, or it fails with
-`FlowActionTimedOut`. A human will not answer a benefits question in 100 seconds. Without
-asynchronous response you have to work around this by responding first and delivering the
-real answer separately through a proactive message.
+`FlowActionTimedOut`. A human will not answer a benefits question in 100 seconds.
 
 **Asynchronous response removes that constraint.** Microsoft:
 
@@ -275,25 +271,17 @@ real answer separately through a proactive message.
 > returning a response to the agent after execution completes."*
 
 So the flow can post a card, wait for a human, and then hand the answer back to the agent as
-its **own return value**. The agent replies to the employee normally.
-
-### What this buys you
-
-| | Without async (legacy workaround) | **With async (this guide)** |
-|---|---|---|
-| Action ordering | **Critical** — response must precede the wait | Normal top-to-bottom |
-| How the answer returns | A separate **proactive message** action | The flow's **own return value** |
-| Where the answer appears | Pushed into a chat | **The same agent conversation**, as a normal reply |
-| Agent must still be installed | ✅ Required, or delivery fails | Not a separate delivery dependency |
-| Delivery status codes (`100`/`300`) | Must be handled | Not applicable |
-| Build steps | 9 | **8** |
+its **own return value**. The agent replies to the employee normally — no separate delivery
+step, no dependency on the employee still having the agent installed, and no delivery status
+codes to handle.
 
 ### What it does *not* change
 
 - **The 30-day ceiling.** A flow run still cannot exceed 30 days, so you still need an
   explicit timeout — [Step D.4](#step-d4--add-a-timeout-path).
-- **The Responsible AI disclosure.** The reply now looks exactly like an agent answer, so the
-  wording must still make clear a human wrote it.
+- **The Responsible AI disclosure.** The reply now looks exactly like an agent answer, so it
+  must be labelled as human-written — see
+  [Making it clear which answers came from a person](#making-it-clear-which-answers-came-from-a-person).
 - **Anonymity.** That still comes from the transport, not from a setting.
 - **The conversation session clock.** This is the important one — see the next section.
 
@@ -361,16 +349,11 @@ flow run history will report success either way**. Nothing would alert you.
 
 #### The test that settles it
 
-Cheap, and it converts an unknown into a fact:
-
-1. Build the flow as described.
-2. Escalate a question from your own account.
-3. **Do not touch the chat.** Leave it completely idle.
-4. Answer the card after **90 minutes**, then repeat at your real target (4–8 hours).
-5. Confirm the answer arrives, and check the run history either way.
-
-**Do this before briefing HR**, because the result determines what you can promise. Test at
-the duration you intend to promise — a passing 90-minute test does not prove 8 hours.
+Cheap, and it converts an unknown into a fact: escalate a question, leave the chat completely
+idle, and answer the card after **90 minutes** — then repeat at your real target duration.
+The full procedure is in
+[Step D.7](#step-d7--publish-and-test-end-to-end); run it **before briefing HR**, because the
+result determines what you can promise.
 
 #### If the long wait does not survive
 
@@ -379,7 +362,8 @@ Three fallbacks, in order of preference:
 1. **Shorten the promise.** Set the card timeout to `PT30M`–`PT2H` and staff the channel
    during business hours. Pair this with the operating-hours check described under
    [Pros and cons](#pros-and-cons).
-2. **Deliver by proactive message instead** — [Variant D1](#-variant-d1--let-the-agent-confirm-instantly-instead).
+2. **Deliver by proactive message instead** — see
+   [Alternatives worth knowing about](#alternatives-worth-knowing-about).
    Proactive messages are explicitly designed to reach a user *outside* an active
    conversation. The cost is the agent-installed prerequisite and the analytics blind spot.
 3. **Send the answer by email**, reusing the pattern your `send_hr_email` feature already
@@ -628,23 +612,28 @@ speaks it.
    embedded — use the lightning-bolt picker to insert the token:
 
    ```
-   HR has answered your question:
+   💬 **Answered by a person on the HR benefits team**
 
    <the "answer" output from the adaptive card>
 
-   If you need more help, just ask me again.
+   —
+   Individual responders are not identified. If you need more help, just ask me again.
    ```
+
+> 💡 **Why the label matters more under async.** The reply now arrives as an ordinary agent
+> message, visually identical to model-generated answers. See
+> [Making it clear which answers came from a person](#making-it-clear-which-answers-came-from-a-person)
+> for the full labelling scheme, including the timeout message.
 
 > ⚠️ **`answer` is the typed text; `submitActionId` is the button.** Microsoft's card
 > documentation notes that `submitActionId` holds *"the `title` of the action the user
 > selected."* That tells you **which button** was pressed, not what was written. You want
 > **`answer`**.
 
-⚠️ **Do not soften "HR has answered your question."** Microsoft's Responsible AI guidance
-requires that agents *"make clear when the user is interacting with an agent and when they're
-receiving a response from a human."* Hiding **who** answered is fine; obscuring **that a
-human answered** is not. This matters *more* under async, because the reply now looks exactly
-like an ordinary agent answer.
+⚠️ **Do not soften or remove the "Answered by a person" label.** Microsoft's Responsible AI
+guidance requires that agents *"make clear when the user is interacting with an agent and when
+they're receiving a response from a human."* Hiding **who** answered is fine; obscuring **that
+a human answered** is not.
 
 ### Turn on Asynchronous response
 
@@ -671,7 +660,15 @@ answers. You need a second response action that runs *only* on that path.
 9. Tick **has timed out** and **has failed**; untick **is successful**.
 10. Give it the **same output name** — `Answer` — with a timeout message as its value:
 
-    > `Nobody from HR answered within 8 hours. Your question has been recorded and someone will follow up with you by email.`
+    ```
+    🤖 **Automated message**
+
+    Nobody from HR has answered yet. Your question has been recorded and someone will
+    follow up with you by email.
+    ```
+
+⚠️ **Mark this one as automated.** It arrives through the same mechanism as the human answer,
+so without a label an employee will read it as something a person typed.
 
 11. Turn **Asynchronous response** **On** for this action too.
 12. Rename the flow to `Anonymous HR Relay` and click **Save**.
@@ -682,11 +679,11 @@ Flow shape:
 Post adaptive card AND WAIT
     |
     +-- (is successful) ----► Respond to the agent  [async On]
-    |                          Answer = "HR has answered..." + <answer token>
+    |                          Answer = "💬 Answered by a person..." + <answer token>
     |
     +-- (has timed out /
          has failed) --------► Respond to the agent  [async On]
-                               Answer = "Nobody answered..."
+                               Answer = "🤖 Automated message..."
 ```
 
 > ⚠️ **Every branch must respond, and with the same outputs.** Microsoft: the response action
@@ -729,7 +726,7 @@ This is the same authentication dependency your `send_hr_email` feature already 
 4. Add a **Send a message** node **before** the flow call, so the employee is not left
    watching a silent screen while the flow waits:
 
-   > `I've sent your question to the HR team — I'll reply here as soon as they answer.`
+   > `I've sent your question to a person on the HR team — I'll post their reply here as soon as they answer, marked 💬 Answered by a person.`
 
 ⚠️ **Put this message before the tool call, not after.** Under asynchronous response the flow
 does not return until a human answers, so a node placed *after* the call will not run until
@@ -754,17 +751,20 @@ the `Answer` output when it eventually returns.
 6. As a representative, type an answer and click **Send answer**.
 7. As the employee, check for the reply.
 
-✅ **Checkpoint — all six must be true:**
+✅ **Checkpoint — all seven must be true:**
 - The "I've sent your question" message appeared immediately.
 - The card reached the HR channel with the question and the employee's name.
 - The card updated to `Answer sent to the employee.` after submission.
 - The answer arrived **in the same agent conversation**, as a normal agent reply.
 - The answer arrived even though the wait exceeded 100 seconds — **this is what proves
   asynchronous response is working.**
+- The answer was **visibly marked as written by a person**, and you can tell it apart from the
+  agent's own AI-generated answers at a glance.
 - **Nowhere in the employee's Teams client does the representative's name appear.**
 
-⚠️ Verify the last point deliberately. Click the sender, open the profile, and confirm it
-resolves to the agent and not to a person.
+⚠️ Verify the last two deliberately. Click the sender, open the profile, and confirm it
+resolves to the agent and not to a person — then scroll the conversation and check you can
+distinguish the human reply from the model's answers without reading closely.
 
 ### ⚠️ The test that actually decides the design
 
@@ -820,87 +820,54 @@ Tell representatives:
 
 ---
 
-## 🆕 Variant D1 — let the agent confirm instantly instead
+## Alternatives worth knowing about
 
-Microsoft documents a third shape. If you would rather the agent confirm *immediately* and
-not wait for the flow at all:
+Two variations exist. **Neither is recommended over the build above** — they are here so you
+recognise them if you need them.
 
-> *"If your environment supports asynchronous response but you want the agent to respond
-> immediately, **remove the Respond to the agent action** from the flow. The agent then
-> responds immediately after it successfully triggers the flow."*
+### If long waits turn out not to work
 
-With no response action, the flow has nothing to return, so the answer must be delivered some
-other way — a **proactive Teams message**, documented in
-[Send proactive Microsoft Teams messages](https://learn.microsoft.com/microsoft-copilot-studio/advanced-proactive-message).
+If the long-wait test in [Step D.7](#step-d7--publish-and-test-end-to-end) shows callbacks are
+*not* delivered after several hours, you have two options, in order of preference:
 
-| | Main build (Steps D.1–D.8) | **Variant D1** |
-|---|---|---|
-| Confirmation to employee | Immediate (topic message before the call) | Immediate (agent auto-responds) |
-| How the answer returns | The flow's return value | A separate proactive message |
-| Extra prerequisites | None beyond the flow | Employee must still have the **agent installed**; delivery can fail with status `100` |
-| Appears in analytics | ✅ Normal agent turn | ❌ Proactive messages *"don't appear in conversation transcripts or analytics session data"* |
+1. **Shorten the window.** Set the card timeout to `PT30M`–`PT2H` and staff the channel during
+   business hours. Everything else in this guide stays as written.
+2. **Deliver by proactive message instead.** Remove the **Respond to the agent** action, and
+   add a **Post message in a chat or channel** action configured with
+   **Post as → `Microsoft Copilot Studio agent`** and **Post in → `Chat with agent`**. See
+   [Send proactive Microsoft Teams messages](https://learn.microsoft.com/microsoft-copilot-studio/advanced-proactive-message).
 
-> **Recommendation: use the main build.** Variant D1 reintroduces the delivery dependency and
-> the analytics blind spot that asynchronous response exists to remove. It is worth knowing
-> only if you later need the agent free to do other work the instant the question is filed.
+   Proactive messages are explicitly designed to reach a user *outside* an active conversation,
+   which is exactly the failure mode in question. The costs: the employee must still have the
+   agent **installed** (delivery fails with status `100` otherwise), and proactive messages
+   *"don't appear in conversation transcripts or analytics session data."*
 
-> 💡 **But keep D1 in your back pocket.** If the long-wait test in
-> [Step D.7](#step-d7--publish-and-test-end-to-end) shows callbacks are *not* delivered after
-> several hours, D1 becomes the **recommended** shape rather than a curiosity — proactive
-> messages are explicitly designed to reach a user outside an active conversation, which is
-> exactly the failure mode in question. See
-> [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation).
+   ⚠️ `Post as` must **never** be `User` — that sends the message as the account signed in to
+   the Teams connector, usually the flow owner, and anonymity is lost immediately.
 
-⚠️ If you do build D1, `Post as` must **never** be `User` — that sends the message as the
-account signed in to the Teams connector, usually the flow owner, and anonymity is lost
-immediately.
+### If HR would rather answer from Outlook
 
----
+Copilot Studio has a built-in
+**[Request for information](https://learn.microsoft.com/microsoft-copilot-studio/flows-request-for-information)**
+action (under **Human review**) that replaces Steps D.3–D.4: it pauses the flow, emails
+designated reviewers, collects typed input, and resumes with their answers.
 
-## 🆕 Variant D2 — the native "Request for information" action
-
-Copilot Studio has a **built-in action** that does most of what Steps D.3–D.4 build by hand:
-**[Request for information (RFI)](https://learn.microsoft.com/microsoft-copilot-studio/flows-request-for-information)**,
-under **Human review** in the agent-flow designer.
-
-It pauses the flow, emails designated reviewers, collects structured input, and resumes with
-their answers as dynamic content. Configure a **Title**, **Message**, **Assigned to**, and
-typed inputs (Text, Yes/No, Email, Number, Date — with optional fields, placeholder text, and
-single- or multi-select dropdowns).
-
-| | Card build (Steps D.3–D.4) | **RFI action (D2)** |
+| | Card build (this guide) | Request for information |
 |---|---|---|
 | Where HR responds | Teams channel card | **Outlook email** |
 | Setup effort | Hand-written JSON, timeout branch | A few fields in the designer |
 | Typed/validated inputs | Manual | ✅ Built in |
-| Shared visible queue | ✅ Whole channel sees it | ❌ Individual emails |
-| First response wins | ✅ | ✅ |
-| Anonymity to the employee | ✅ The answer returns as the flow's value | ✅ Same — [Step D.5](#step-d5--return-the-answer-to-the-agent) is unchanged |
-| Works with async response | ✅ | ⚠️ **Unverified** — see below |
+| **Shared visible queue** | ✅ Whole channel sees it | ❌ Individual emails — nobody sees what is outstanding |
 
-⚠️ **Constraints Microsoft states explicitly:**
-- *"All requests are currently sent via **Outlook only**."*
-- *"Requests **can't be sent to users outside of your tenant**."*
-- **Known issue:** outputs can come back wrapped in `{{ }}` — *"ensure that input names are
-  configured without spaces."*
+The anonymous delivery step ([Step D.5](#step-d5--return-the-answer-to-the-agent)) is identical
+either way, so anonymity holds in both.
 
-> ⚠️ **The same long-wait question applies to D2, and is equally untested.** An RFI pauses the
-> flow waiting on a human, exactly as the card does, so it depends on the same asynchronous
-> callback surviving the wait. Choosing D2 does **not** sidestep
-> [the unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) — test it the
-> same way.
+⚠️ **Constraints Microsoft states explicitly:** Outlook only; cannot be sent outside your
+tenant; a known issue where outputs come back wrapped in `{{ }}` unless input names are
+configured without spaces.
 
-> ⚠️ **D2 changes who HR's reply is visible to, not who the employee sees.** The employee still
-> receives the answer from the agent, so anonymity holds. But an emailed RFI is addressed to
-> named individuals, so **HR loses the shared queue** — nobody else sees that a question is
-> outstanding or already handled.
-
-> **Which to choose?** If HR lives in Outlook and you want the simplest build, D2 is less work
-> and gives validated inputs for free. If you want a **visible shared queue** the whole HR team
-> can triage, stay with the card build. The anonymous delivery step is identical either way.
->
-> Related: [Multistage and AI approvals](https://learn.microsoft.com/microsoft-copilot-studio/flows-advanced-approvals)
-> (preview) if an answer ever needs sign-off before reaching the employee.
+⚠️ **This does not sidestep the long-wait risk.** An RFI pauses the flow waiting on a human
+exactly as the card does, so it depends on the same asynchronous callback surviving the wait.
 
 ---
 
@@ -912,9 +879,8 @@ single- or multi-select dropdowns).
 |---|---|
 | **Anonymous by design** | Anonymity comes from the transport, not a setting that can fail open |
 | **Closes the loop** | The answer reaches the employee |
-| **Answer arrives as a normal agent reply** | The flow returns it directly — no separate delivery step |
-| **Visible to Copilot Studio analytics** | The answer is an ordinary agent turn, not an excluded proactive message |
-| **No ordering constraint** | Asynchronous response removes the 100-second rule |
+| **Answer arrives as a normal agent reply** | The flow returns it directly — no separate delivery step, and no dependency on the agent still being installed |
+| **Visible to Copilot Studio analytics** | The answer is an ordinary agent turn, so it appears in transcripts and session data |
 | Likely no new licence | Teams connector actions are standard, not premium |
 | No code change | `function_app.py` untouched |
 | No authentication change | Keeps "Authenticate with Microsoft" — `send_hr_email` unaffected |
@@ -983,16 +949,119 @@ phrasing.
 > of the HR benefits team. Individual responders are not identified."* That is true.
 > *"Completely anonymous"* is not.
 
-> ⚠️ **Microsoft's Responsible AI guidance makes disclosure a requirement.** The
-> [onboarding-agent architecture](https://learn.microsoft.com/power-platform/architecture/solution-ideas/onboarding-agent)
-> states agents *"should make clear when the user is interacting with an agent and when they're
-> receiving a response from a human."* Anonymising **who** answered is fine. Obscuring **that a
-> human answered** is not.
+> ⚠️ **Anonymity and transparency pull in opposite directions.** Hiding **who** answered is
+> fine; obscuring **that a human answered** is not — Microsoft's Responsible AI guidance makes
+> that disclosure a requirement. How to satisfy both is the next section:
+> [Making it clear which answers came from a person](#making-it-clear-which-answers-came-from-a-person).
 
 ### The human factor
 
 Every technical control here can be undone by one person signing their name.
 [Step D.8](#step-d8--brief-the-representatives) is not optional — it is load-bearing.
+
+---
+
+## Making it clear which answers came from a person
+
+Anonymity hides **who** answered. Transparency reveals **what kind of thing** answered. They
+are opposite obligations, and you must satisfy both.
+
+### Why async makes this harder
+
+Under the old proactive-message design, a human answer arrived as a visibly different message.
+Under this build it returns as **the flow's value, spoken by the agent** — so it lands in the
+same conversation, from the same sender, in the same visual style as everything the model
+generates. Nothing distinguishes them unless you add the distinction yourself.
+
+Microsoft's requirement is explicit:
+
+> *"Agents should make clear when the user is interacting with an agent and when they're
+> receiving a response from a human."*
+> — [Smart onboarding agent architecture](https://learn.microsoft.com/power-platform/architecture/solution-ideas/onboarding-agent)
+
+And more broadly, on transparency:
+
+> *"Clearly communicate the presence and role of AI within the product experience… clear
+> indicators, like labels such as 'AI-generated content may be incorrect,' help set
+> appropriate expectations."*
+> — [Responsible AI for agent design](https://learn.microsoft.com/agents/design-guidelines/responsible-ai)
+
+### The four message types your employee will see
+
+This is the part most designs miss. There are **four** kinds of message in this feature, not
+two, and only one of them is written by a human:
+
+| # | Message | Who authored it | Must be labelled |
+|---|---|---|---|
+| 1 | The agent's normal answers | **The model** (via `agent_httptrigger`) | AI-generated |
+| 2 | "I've sent your question to HR" | **You** (scripted topic text) | Automated |
+| 3 | The relayed answer | **A real person** | **Human** |
+| 4 | The timeout message | **You** (scripted, no human involved) | Automated |
+
+⚠️ **Message 4 is the trap.** It arrives in the same place, at the same point in the flow, and
+through the same mechanism as message 3. If it is not clearly marked as automated, an employee
+will reasonably read *"Nobody from HR answered…"* as something a person typed.
+
+### How to label them
+
+Use a **consistent visual marker** so employees learn it. Pick one convention and apply it
+everywhere.
+
+**For the human answer** — set the `Answer` output in
+[Step D.5](#step-d5--return-the-answer-to-the-agent) to:
+
+```
+💬 **Answered by a person on the HR benefits team**
+
+<the "answer" output from the adaptive card>
+
+—
+Individual responders are not identified. If you need more help, just ask me again.
+```
+
+**For the timeout message** — same step, the timeout branch:
+
+```
+🤖 **Automated message**
+
+Nobody from HR has answered yet. Your question has been recorded and someone will
+follow up with you by email.
+```
+
+**For the acknowledgement** in [Step D.6](#step-d6--wire-the-flow-into-the-topic), set the
+expectation *before* the wait so the labelling makes sense when it arrives:
+
+> `I've sent your question to a person on the HR team. I'll post their reply here — it will be marked as coming from a person.`
+
+**For the agent's own answers**, add a standard AI disclosure to your existing generative
+responses, following Microsoft's example wording: *"AI-generated — may be incorrect."*
+
+> 💡 **Why emoji plus bold text, rather than one or the other.** Teams renders a limited
+> Markdown subset, and screen readers announce emoji names aloud. The bold label carries the
+> meaning; the emoji makes it scannable. Do not rely on the emoji alone.
+
+### Two rules that protect the distinction
+
+⚠️ **1. Never let the model rewrite a human answer.** Pass the flow's `Answer` output straight
+into a **Send a message** node, which renders text verbatim. If you route it through a
+generative node or ask the model to summarise or "improve" it, the reply becomes
+model-generated text *about* a human answer — and your label becomes false. This is the single
+easiest way to break transparency without noticing.
+
+⚠️ **2. Label at the source, not in the topic.** Put the wording inside the **flow's** `Answer`
+output rather than adding it in the Copilot Studio topic. If a callback ever arrives after the
+topic's variables have been reset — one of the documented outcomes in
+[The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) — the flow's
+text still carries the label, while topic-side wording could be lost.
+
+### What to tell employees up front
+
+One line in your agent's greeting or help topic prevents most confusion:
+
+> `Most of my answers are AI-generated from HR benefits documents. If I can't answer, I can send your question to a person on the HR team — their reply will be clearly marked as coming from a person.`
+
+✅ **Checkpoint:** ask a question you know the agent cannot answer, escalate it, and confirm the
+employee can tell at a glance which of the four message types each reply is.
 
 ---
 
@@ -1008,10 +1077,9 @@ conversation transcripts or analytics session data"* limitation. Copilot Studio 
 see the conversation.
 
 ⚠️ **But telemetry is your only detector for the silent-failure mode.** If a callback is ever
-dropped because the conversation closed, the flow still reports success and nothing surfaces
-the loss. Emitting an event when an escalation is **raised**, and a second when an answer is
-**returned**, lets you reconcile the two counts. A persistent gap between them is the signal
-that answers are being lost — see
+dropped, the flow still reports success and nothing surfaces the loss. Emitting an event when
+an escalation is **raised**, and a second when an answer is **returned**, lets you reconcile
+the two counts. A persistent gap between them is the signal that answers are being lost — see
 [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation).
 
 ### Two ways to do it
@@ -1107,13 +1175,9 @@ No. It adds a branch beside it on the same Question node.
 **Q: How can a flow wait hours when agent flows must respond in 100 seconds?**
 Because **Asynchronous response** is turned on. Microsoft: *"Asynchronous flows continue
 running beyond the previous two-minute limit while still returning a response to the agent
-after execution completes."* Without that setting the run would fail with
-`FlowActionTimedOut`.
-
-**Q: What if someone turns that setting off?**
-The feature breaks immediately — the flow will fail about 100 seconds after each escalation.
-It is a per-flow setting, so anyone editing the flow can affect it. Worth noting in your
-runbook.
+after execution completes."* If anyone turns it off, the feature breaks immediately — every
+escalation fails with `FlowActionTimedOut` after about 100 seconds. It is a per-flow setting,
+so anyone editing the flow can affect it. Worth noting in your runbook.
 
 **Q: The flow can run for 30 days — so can a rep answer 3 days later?**
 The flow will still be running, and Microsoft documents no expiry on the callback. But it also
@@ -1181,106 +1245,107 @@ real.
 
 ---
 
-## Reference material
+## References
 
-### Adaptive Cards — official
+Grouped by how close each item is to the build you are doing. **Tier 1 is what you actually
+need.** Everything below it is there to resolve a specific problem or decision, and every
+entry says which one.
 
-| Resource | What it covers | Closeness |
-|---|---|---|
-| [Create your first adaptive card](https://learn.microsoft.com/power-automate/create-adaptive-cards) | **Full walkthrough of post-card-and-wait** | ⭐ **Direct tutorial for Step D.3** |
-| [Overview of adaptive cards for Power Automate](https://learn.microsoft.com/power-automate/overview-adaptive-cards) | Wait-for-response actions, update messages, known issues | Reference |
-| [Adaptive Cards overview (Copilot Studio)](https://learn.microsoft.com/microsoft-copilot-studio/adaptive-cards-overview) | **Teams caps schema at 1.5**; submit-button best practice | **Before editing the card** |
-| [Ask with Adaptive Cards](https://learn.microsoft.com/microsoft-copilot-studio/authoring-ask-with-adaptive-card) | Interactive card directly in a topic | Alternative shape |
-| [Lead collection sample](https://learn.microsoft.com/power-automate/lead-collection-sample) | **`Input.Text` `id` → output token** | Shows how card input reaches the flow |
-| [Adaptive Cards Designer](https://adaptivecards.io/designer/) | Visual card editor | Editing the Step D.3 card |
-| [Adaptive Cards schema explorer](https://adaptivecards.io/explorer/) | Every element and property | Adding fields |
+### Tier 1 — read these before you build
 
-### Proactive messaging — only needed for Variant D1
+The five that carry this design. If you read nothing else, read these.
 
-| Resource | What it covers |
+| Resource | Why it matters here |
 |---|---|
-| [Send proactive Microsoft Teams messages](https://learn.microsoft.com/microsoft-copilot-studio/advanced-proactive-message) | Post as agent / Chat with agent; installation prerequisites; status codes `200`/`100`/`300` |
-| [Send a message in Teams using Power Automate](https://learn.microsoft.com/power-automate/teams/send-a-message-in-teams) | Every Post as / Post in combination |
+| [**Asynchronous response support for agent flows**](https://learn.microsoft.com/microsoft-copilot-studio/flow-asynchronous-response) | ⭐ **The basis of this build.** Enabling the toggle; Teams callback support; what happens in an environment without it |
+| [**Power Automate environments move to new architecture**](https://learn.microsoft.com/power-automate/environment-architecture) | The environment prerequisite for async; how to check `environmentFlowHostingType` |
+| [**Create your first adaptive card**](https://learn.microsoft.com/power-automate/create-adaptive-cards) | The post-card-and-wait walkthrough — the exact action [Step D.3](#step-d3--post-the-card-and-wait-for-an-answer) uses. Also states the **Workflows app** prerequisite |
+| [**Create an agent flow as a tool**](https://learn.microsoft.com/microsoft-copilot-studio/advanced-flow-create) | The **100-second limit** async lifts; the 30-day ceiling behind [Step D.4](#step-d4--add-a-timeout-path); the solution requirement |
+| [**Modify an existing flow to use with an agent**](https://learn.microsoft.com/microsoft-copilot-studio/flow-modify-use-with-agent) | **Same outputs at every branch** — the rule [Step D.5](#step-d5--return-the-answer-to-the-agent)'s two response actions must satisfy. ⚠️ Predates async; **ignore its "set Asynchronous response Off" instruction** |
 
-### Agent flows and asynchronous response
+### Tier 2 — while building the card (Step D.3)
 
-| Resource | What it covers |
+| Resource | Why it matters here |
 |---|---|
-| [**Asynchronous response support for agent flows**](https://learn.microsoft.com/microsoft-copilot-studio/flow-asynchronous-response) | ⭐ **The basis of this build** — enabling the toggle, Teams callback support, behaviour without support |
-| [**Power Automate environments move to new architecture**](https://learn.microsoft.com/power-automate/environment-architecture) | **The environment prerequisite**; how to check `environmentFlowHostingType` |
-| [Manage sessions and capacity](https://learn.microsoft.com/microsoft-copilot-studio/requirements-sessions-management) | ⚠️ **Legacy PVA billing article** — its 30/60-minute figures are *billing* boundaries, not delivery limits. Cited here only to warn against misreading them |
-| [Deploy agents in Microsoft Teams](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deploy-agent-teams) | Teams persistent-conversation model; stale context over long-lived threads |
-| [Create an agent flow as a tool](https://learn.microsoft.com/microsoft-copilot-studio/advanced-flow-create) | **100-second limit**; actions after the response run up to 30 days |
-| [Modify an existing flow to use with an agent](https://learn.microsoft.com/microsoft-copilot-studio/flow-modify-use-with-agent) | Required trigger/response action; response must return the **same outputs at every branch** |
-| [Request for information (RFI)](https://learn.microsoft.com/microsoft-copilot-studio/flows-request-for-information) | **Variant D2** — native pause-and-ask-a-human |
-| [Multistage and AI approvals](https://learn.microsoft.com/microsoft-copilot-studio/flows-advanced-approvals) (preview) | Staged approval gates |
-| [Agent flows overview](https://learn.microsoft.com/microsoft-copilot-studio/flows-overview) | Agent flows vs workflows |
-| [Agent flows FAQ](https://learn.microsoft.com/microsoft-copilot-studio/flows-faqs) | Confirms agent flows work in **GCC**; billing model |
-| [New Power Automate infrastructure](https://learn.microsoft.com/power-automate/environment-architecture) | The environment requirement for async |
-| [Limits of automated, scheduled, and instant flows](https://learn.microsoft.com/power-automate/limits-and-config) | 30-day run duration |
-| [Cloud flow error code reference](https://learn.microsoft.com/power-automate/error-reference) | `ActionTimedOut`, `OperationTimedOut`, timeout branches |
+| [Overview of adaptive cards for Power Automate](https://learn.microsoft.com/power-automate/overview-adaptive-cards) | Why the plain "post" action fails; single-submit limit; **Update message** behaviour; DoD exclusion |
+| [Adaptive Cards overview (Copilot Studio)](https://learn.microsoft.com/microsoft-copilot-studio/adaptive-cards-overview) | **Teams caps schema at 1.5** — read before editing the card JSON |
+| [Lead collection sample](https://learn.microsoft.com/power-automate/lead-collection-sample) | Proves `Input.Text` `id` → output token — the mechanism behind the `answer` token |
+| [Ask with Adaptive Cards](https://learn.microsoft.com/microsoft-copilot-studio/authoring-ask-with-adaptive-card) | Submit-button behaviour with **consecutive cards** — your HR channel will accumulate similar-looking ones |
+| [Adaptive Cards Designer](https://adaptivecards.io/designer/) | Visual editing — **set target version to 1.5 or lower** before copying JSON back |
 
-### Working code you can read
+### Tier 3 — when something breaks
 
-| Resource | What it demonstrates |
+| Resource | Why it matters here |
 |---|---|
-| [**Teams sample: bot-proactive-message**](https://github.com/OfficeDev/Microsoft-Teams-Samples/tree/main/samples/TeamsSDK/bot-proactive-message) | **Working proactive-messaging code** — the mechanism behind Step D.6 |
-| [Teams sample: bot-cards](https://github.com/OfficeDev/Microsoft-Teams-Samples/tree/main/samples/TeamsSDK/bot-cards) | Card types and actions as rendered in Teams |
-| [microsoft/AdaptiveCards](https://github.com/microsoft/AdaptiveCards) | Schema, renderers, samples |
-| [**contact-center/skill-handoff**](https://github.com/microsoft/CopilotStudioSamples/tree/main/contact-center/skill-handoff) | **The closest official analogue to this design** — a live handoff that keeps Teams as the channel. It predates asynchronous response and so uses proactive messaging for the human's replies, but confirms the overall shape. Also states the engagement-hub pattern *"doesn't work well"* with Teams |
-| [microsoft/CopilotStudioSamples](https://github.com/microsoft/CopilotStudioSamples) | Official Copilot Studio sample repository |
-| [EmployeeSelfServiceAgent](https://github.com/microsoft/CopilotStudioSamples/tree/main/EmployeeSelfServiceAgent) | HR self-service topic design in the same domain as yours (marked pending deprecation) |
-| [Power CAT Copilot Agent Kit](https://github.com/microsoft/Power-CAT-Copilot-Studio-Kit) | Agent Insights Hub (App Insights analytics), batch testing, Agent Debugger. **GCC support unverified** |
+| [Understand error codes](https://learn.microsoft.com/troubleshoot/power-platform/copilot-studio/authoring/error-codes) | **`FlowActionTimedOut`** — what you see if the async toggle is Off. Also `3000` |
+| [FlowActionBadRequest in channels](https://learn.microsoft.com/troubleshoot/power-platform/copilot-studio/channels/agent-flow-action-bad-request) | **Output-name mismatch between branches** — the most likely error after Step D.5 |
+| [Cloud flow error code reference](https://learn.microsoft.com/power-automate/error-reference) | `OperationTimedOut` and **Configure run after** — how Step D.5's timeout branch works |
+| [Billing rates and management](https://learn.microsoft.com/microsoft-copilot-studio/requirements-messages-management) | ⚠️ **Capacity exhaustion blocks agent flow runs** while the agent keeps answering — escalation dies silently. Also the M365 Copilot exemption and pay-as-you-go |
+| [Agent flows overview](https://learn.microsoft.com/microsoft-copilot-studio/flows-overview) | Capacity per run; **test runs are free**, so the long-wait tests cost nothing |
+| [Best Practices for Deploying Agents in Teams](https://microsoft.github.io/mcscatblog/posts/copilot-studio-teams-deployment-ux/) | Why Teams serves a stale agent version — behind two troubleshooting rows |
 
-### Microsoft CAT team blog — "The Custom Engine"
+### Tier 4 — the unresolved long-wait risk
 
-| Post | Why it matters |
+Everything bearing on [the one open question](#the-unresolved-risk--the-flow-outlives-the-conversation).
+
+| Resource | Why it matters here |
 |---|---|
-| [**Building a Custom Human-in-the-Loop Experience**](https://microsoft.github.io/mcscatblog/posts/human-in-the-loop-custom-connector/) | **Names this design's scaling limit** — connectors *"own the delivery channel"* |
-| [Design Copilot Studio Agents for Teams](https://microsoft.github.io/mcscatblog/posts/copilot-studio-teams-agent-patterns/) | Eight production patterns with importable YAML |
-| [Best Practices for Deploying Agents in Teams](https://microsoft.github.io/mcscatblog/posts/copilot-studio-teams-deployment-ux/) | Session persistence, update caching |
-| [From DEV to PROD: Deploying Agents to Teams](https://microsoft.github.io/mcscatblog/posts/copilot-studio-teams-deployment/) | Environments, solutions, promotion |
+| [Deploy agents in Microsoft Teams](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deploy-agent-teams) | Teams threads persist *"indefinitely"* — **the main evidence the long wait should work**. Also documents token expiry over long threads |
+| [Inactivity trigger](https://learn.microsoft.com/microsoft-copilot-studio/guidance/inactivity-trigger-guidance) | Teams persistent-conversation model; 30-minute transcript boundary (**not** a delivery limit) |
+| [Manage sessions and capacity](https://learn.microsoft.com/microsoft-copilot-studio/requirements-sessions-management) | ⚠️ **Legacy billing article.** Listed *only* so you do not misread its 30/60-minute figures as callback deadlines |
 
-### Community blog posts (not Microsoft-authored)
+### Tier 5 — configuration facts this build depends on
 
-| Post | Author | Covers |
-|---|---|---|
-| [Register response from custom Adaptive Cards](https://poszytek.eu/en/microsoft-en/office-365-en/powerautomate-en/register-response-from-custom-adaptive-cards-sent-from-power-automate-to-teams/) | Tomasz Poszytek, **MVP** | Capturing submitted card values |
-| [Dynamic Adaptive Cards with Copilot Studio](https://reshmeeauckloo.com/posts/copilotstudio-dynamic-adaptivecard/) | Reshmee Auckloo | Cards whose content varies at run time |
-| [Copilot Studio: Create an Agent and Use Adaptive Cards](https://rajeevpentyala.com/2025/07/15/copilot-studio-create-an-agent-and-use-adaptive-cards/) | Rajeev Pentyala | End-to-end card walkthrough |
-| [Capturing Adaptive Card Responses Without a Bot](https://devopsaitoolkit.com/blog/teams-workflows-card-response-no-bot/) | Community | Card responses via Workflows |
-| [jameswh3/copilot-studio-adaptive-cards](https://github.com/jameswh3/copilot-studio-adaptive-cards) | Community | Card samples and guide |
-
-⚠️ **These are third-party and unversioned.** They can go stale without notice, and none
-address GCC. Use them to understand *mechanics*, then confirm against the official docs.
-
-### Free hands-on training
-
-| Module | Covers |
+| Resource | Why it matters here |
 |---|---|
-| [**Build Power Automate flows for your agent**](https://learn.microsoft.com/training/modules/build-flows-chatbot-online-workshop/) | Guided workshop: calling flows from topics, passing variables |
-| [Enhance Copilot Studio agents](https://learn.microsoft.com/training/modules/enhance-power-virtual-agents-bots/) | Calling Power Automate from topics; analysing agent performance |
+| [Copilot Studio US Government service URLs](https://learn.microsoft.com/microsoft-copilot-studio/requirements-licensing-gcc#microsoft-copilot-studio-us-government-service-urls) | **Authoritative GCC portal addresses** — they are not `.com` → `.us` swaps |
+| [Variables overview](https://learn.microsoft.com/microsoft-copilot-studio/authoring-variables-about) | `System.User.PrincipalName` and other system variables mapped in Step D.6 |
+| [Add user authentication to topics](https://learn.microsoft.com/microsoft-copilot-studio/advanced-end-user-authentication) | Why those variables are empty without **Authenticate with Microsoft** |
+| [Channel experience reference table](https://learn.microsoft.com/microsoft-copilot-studio/publication-fundamentals-publish-channels#channel-experience-reference-table) | **Six-option cap** on multiple choice in Teams |
+| [Plan for government clouds](https://learn.microsoft.com/microsoftteams/platform/concepts/cloud-overview) | Workflows app available in GCC, not GCC High/DoD |
 
-⚠️ **Training modules assume a commercial tenant.** Substitute your GCC addresses
-(`gcc.powerva.microsoft.us`, `gov.flow.microsoft.us`) and expect screenshot mismatches.
+### Tier 6 — transparency and escalation design
 
-### Escalation design and Responsible AI
-
-| Resource | What it gives you |
+| Resource | Why it matters here |
 |---|---|
-| [Alternate escalation paths](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deflection-alternate-escalation-paths) | Operating-hours checks; email fallback |
-| [Deflection overview](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deflection-overview) | Official metric definitions |
-| [Deflection and escalation analysis](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deflection-topic-escalation-analysis) | Escalation Rate Drivers |
-| [Smart onboarding agent architecture](https://learn.microsoft.com/power-platform/architecture/solution-ideas/onboarding-agent) | **Responsible AI: escalation required; human-vs-agent disclosure** |
+| [Smart onboarding agent architecture](https://learn.microsoft.com/power-platform/architecture/solution-ideas/onboarding-agent) | **"Make clear when the user is… receiving a response from a human"** — the requirement behind [the labelling section](#making-it-clear-which-answers-came-from-a-person) |
+| [Responsible AI for agent design](https://learn.microsoft.com/agents/design-guidelines/responsible-ai) | The transparency principle; example label *"AI-generated content may be incorrect"* |
+| [Alternate escalation paths](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deflection-alternate-escalation-paths) | Operating-hours checks — prevents an employee asking at 22:00 and waiting out the timeout |
+| [Building a Custom Human-in-the-Loop Experience](https://microsoft.github.io/mcscatblog/posts/human-in-the-loop-custom-connector/) | **Names this design's scaling limit** — connectors *"own the delivery channel."* The sanctioned next step if channel noise becomes real |
+
+### Tier 7 — working code and worked examples
+
+| Resource | Why it matters here |
+|---|---|
+| [contact-center/skill-handoff](https://github.com/microsoft/CopilotStudioSamples/tree/main/contact-center/skill-handoff) | **The closest official analogue to this design** — a live handoff that keeps Teams as the channel. Predates async (so it uses proactive messaging), but confirms the overall shape |
+| [Register response from custom Adaptive Cards](https://poszytek.eu/en/microsoft-en/office-365-en/powerautomate-en/register-response-from-custom-adaptive-cards-sent-from-power-automate-to-teams/) | Tomasz Poszytek (**MVP**) — the `answer` token mechanism worked through end to end |
+| [Build Power Automate flows for your agent](https://learn.microsoft.com/training/modules/build-flows-chatbot-online-workshop/) | Guided practice at calling a flow from a topic — exactly what [Step D.6](#step-d6--wire-the-flow-into-the-topic) does |
+| [Power CAT Copilot Agent Kit](https://github.com/microsoft/Power-CAT-Copilot-Studio-Kit) | Agent Insights Hub — possible alternative to building the Power BI dashboard. **GCC support unverified** |
+
+⚠️ **Third-party and training material is unversioned and assumes a commercial tenant.**
+Substitute your GCC addresses (`gcc.powerva.microsoft.us`, `gov.flow.microsoft.us`) and expect
+screenshot mismatches. Use them for *mechanics*, then confirm against the official docs.
+
+### Tier 8 — only if you take an alternative
+
+See [Alternatives worth knowing about](#alternatives-worth-knowing-about). You do not need
+these for the recommended build.
+
+| Resource | Why it matters here |
+|---|---|
+| [Request for information (RFI)](https://learn.microsoft.com/microsoft-copilot-studio/flows-request-for-information) | The **Outlook alternative** to the Teams card — Outlook-only; no external users; `{{ }}` known issue |
+| [Send proactive Microsoft Teams messages](https://learn.microsoft.com/microsoft-copilot-studio/advanced-proactive-message) | The **fallback if long waits fail** — Post as agent / Chat with agent; installation prerequisite; status codes `100`/`300`; **excluded from transcripts and analytics** |
+| [Send a message in Teams using Power Automate](https://learn.microsoft.com/power-automate/teams/send-a-message-in-teams) | Proactive fallback — every Post as / Post in combination |
+| [Share an agent](https://learn.microsoft.com/microsoft-copilot-studio/admin-share-bots) | Proactive fallback — permission prerequisite for delivery |
 
 ### Your own repository
 
-| Document | Why it is relevant |
+| Document | Why it matters here |
 |---|---|
-| `COPILOT_STUDIO_SETUP_GUIDE.md` | Click-by-click guide for the existing "Email HR" flow — same patterns |
+| `COPILOT_STUDIO_SETUP_GUIDE.md` | Click-by-click guide for the existing "Email HR" flow — same patterns, already working |
 | `EMAIL_HR_DEPLOYMENT_CHECKLIST.md` | Section 5: authentication dependency. Section 9: variable mappings |
 | `CUSTOM_FEEDBACK_SETUP_GUIDE.md` | A second worked Copilot Studio → flow → Function example |
-| `ANALYTICS_KQL_QUERIES.md` | Existing event schema for the telemetry event |
+| `ANALYTICS_KQL_QUERIES.md` | Existing event schema, if you add the telemetry event |
 
 ---
 
@@ -1291,91 +1356,20 @@ address GCC. Use them to understand *mechanics*, then confirm against the offici
 | **Adaptive Card** | A JSON-defined interactive block that renders natively in Teams |
 | **Agent** | Two meanings. *AI agent* = the bot. *Live agent* = a human |
 | **Agent flow** | A flow with the **When an agent calls the flow** trigger, callable from a topic |
+| **Asynchronous response** | The per-action setting this build depends on. With it **On**, a flow may run past the 100-second limit and return its result to the agent when it finishes ([Step D.5](#step-d5--return-the-answer-to-the-agent)) |
+| **Callback** | The delayed result an asynchronous flow sends back to the agent once it completes |
 | **Channel** (Teams) | A named section inside a team |
-| **Flow bot** | The generic bot identity Power Automate uses for messages not tied to a person |
+| **Configure run after** | The per-action setting controlling which predecessor outcomes (succeeded / failed / timed out) allow an action to run. Used to build the timeout branch |
+| **Copilot Credits** | The usage meter agent flows consume. Exhausting the environment's capacity **blocks new agent flow runs** |
+| **`FlowActionTimedOut`** | The error when a flow fails to answer the agent within 100 seconds. Under this build it means **Asynchronous response is Off** |
+| **Flow bot** | The generic bot identity Power Automate uses for messages not tied to a person *(only relevant if you fall back to proactive delivery)* |
 | **GCC** | Government Community Cloud. **Not** the same as GCC High |
 | **ISO 8601 duration** | A timeout format. `PT8H` = 8 hours, `PT5M` = 5 minutes |
 | **Maker** | Someone permitted to build agents and flows |
-| **Proactive message** | A message an agent sends without the user prompting it |
-| **RFI** | Request for information — the native pause-and-ask-a-human action |
+| **Proactive message** | A message an agent sends without the user prompting it. Not used by this build — only by the [fallback](#alternatives-worth-knowing-about) if long waits fail |
+| **RFI** | Request for information — a built-in pause-and-ask-a-human action that emails reviewers instead of posting a card. See [Alternatives](#alternatives-worth-knowing-about) |
 | **Solution** | A Power Platform container; flows must be in one to be callable by an agent |
+| **Token** (dynamic content) | A value produced by an earlier action, inserted via the lightning-bolt picker. The card's `Input.Text` `id` becomes its token name |
 | **Topic** | A conversation script |
+| **Update message** | The text replacing the card after submission, so a second rep does not answer the same question |
 | **UPN** | User Principal Name — usually the sign-in email address |
-
----
-
-## Sources
-
-Every non-obvious claim traces to one of these. All verified to resolve.
-
-**Proactive messaging and delivery:**
-
-- [Send proactive Microsoft Teams messages](https://learn.microsoft.com/microsoft-copilot-studio/advanced-proactive-message) — **Post as agent / Chat with agent**; installation prerequisites; status codes `200`/`100`/`300`; **proactive messages excluded from transcripts and analytics**; personal chat only
-- [Send a message in Teams using Power Automate](https://learn.microsoft.com/power-automate/teams/send-a-message-in-teams) — Post as Flow bot / Copilot Studio agent; Chat with Flow bot
-- [Create and send messages (Teams webhooks)](https://learn.microsoft.com/microsoftteams/platform/webhooks-and-connectors/how-to/connectors-using) — **Flow bot unsupported in private channels**
-
-**Adaptive Cards:**
-
-- [Overview of adaptive cards for Power Automate](https://learn.microsoft.com/power-automate/overview-adaptive-cards) — wait-for-response actions; single-submit limit; update messages; **DoD exclusion**
-- [Create your first adaptive card](https://learn.microsoft.com/power-automate/create-adaptive-cards) — end-to-end tutorial; **Workflows app prerequisite**
-- [Adaptive Cards overview (Copilot Studio)](https://learn.microsoft.com/microsoft-copilot-studio/adaptive-cards-overview) — **Teams caps schema at 1.5**; unique submit-action data
-- [Ask with Adaptive Cards](https://learn.microsoft.com/microsoft-copilot-studio/authoring-ask-with-adaptive-card) — submit-button behaviour with consecutive cards
-- [Lead collection sample](https://learn.microsoft.com/power-automate/lead-collection-sample) — `Input.Text` `id` becomes the output token
-
-**Agent flows and timing:**
-
-- [Create an agent flow as a tool](https://learn.microsoft.com/microsoft-copilot-studio/advanced-flow-create) — **100-second limit**; actions after the response run to 30 days; solution requirement
-- [Modify an existing flow to use with an agent](https://learn.microsoft.com/microsoft-copilot-studio/flow-modify-use-with-agent) — trigger/response actions; async **Off**; `Error code: 3000`
-- [Asynchronous response support for agent flows](https://learn.microsoft.com/microsoft-copilot-studio/flow-asynchronous-response) — **the basis of this build**; enabling the toggle; Teams supported; M365 Copilot and telephony not; behaviour without support
-- [Power Automate environments move to new architecture](https://learn.microsoft.com/power-automate/environment-architecture) — SelfHost Multitenant requirement; `environmentFlowHostingType` check
-- [Manage sessions and capacity](https://learn.microsoft.com/microsoft-copilot-studio/requirements-sessions-management) — **legacy Power Virtual Agents billing**; the 30-minute and 60-minute figures define *billed sessions*, **not** message delivery. Listed to prevent misreading them as callback deadlines
-- [Inactivity trigger](https://learn.microsoft.com/microsoft-copilot-studio/guidance/inactivity-trigger-guidance) — new transcript record after 30 minutes idle; **Teams persistent-conversation model**; 7-day timer ceiling
-- [Deploy agents in Microsoft Teams](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deploy-agent-teams) — Teams threads persist *"indefinitely"*; stale context and token expiry over long conversations
-- [New Power Automate infrastructure](https://learn.microsoft.com/power-automate/environment-architecture) — environment requirement for async
-- [Request for information (RFI)](https://learn.microsoft.com/microsoft-copilot-studio/flows-request-for-information) — **Outlook only; first response wins; no external users; `{{ }}` known issue**
-- [Multistage and AI approvals](https://learn.microsoft.com/microsoft-copilot-studio/flows-advanced-approvals) — staged approval gates
-- [Agent flows FAQ](https://learn.microsoft.com/microsoft-copilot-studio/flows-faqs) — GCC availability; usage-based billing
-- [Limits of automated, scheduled, and instant flows](https://learn.microsoft.com/power-automate/limits-and-config) — 30-day run duration
-- [Cloud flow error code reference](https://learn.microsoft.com/power-automate/error-reference) — `ActionTimedOut`, `OperationTimedOut`
-- [FlowActionBadRequest in channels](https://learn.microsoft.com/troubleshoot/power-platform/copilot-studio/channels/agent-flow-action-bad-request) — schema mismatch after editing a flow
-- [Understand error codes](https://learn.microsoft.com/troubleshoot/power-platform/copilot-studio/authoring/error-codes) — `FlowActionTimedOut`, `3000`
-
-**Copilot Studio configuration:**
-
-- [Variables overview](https://learn.microsoft.com/microsoft-copilot-studio/authoring-variables-about) — `User.PrincipalName` and system variables
-- [Add user authentication to topics](https://learn.microsoft.com/microsoft-copilot-studio/advanced-end-user-authentication) — auth variables unavailable without authentication
-- [Channel experience reference table](https://learn.microsoft.com/microsoft-copilot-studio/publication-fundamentals-publish-channels#channel-experience-reference-table) — **six-option cap** in Teams
-- [Share an agent](https://learn.microsoft.com/microsoft-copilot-studio/admin-share-bots) — permission prerequisite for proactive delivery
-
-**GCC:**
-
-- [Copilot Studio US Government service URLs](https://learn.microsoft.com/microsoft-copilot-studio/requirements-licensing-gcc#microsoft-copilot-studio-us-government-service-urls) — **authoritative GCC portal addresses**
-- [Plan for government clouds](https://learn.microsoft.com/microsoftteams/platform/concepts/cloud-overview) — Workflows available in GCC, not GCC High/DoD
-
-**Escalation design and Responsible AI:**
-
-- [Alternate escalation paths](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deflection-alternate-escalation-paths) — operating-hours and queue checks
-- [Deflection overview](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deflection-overview) — official metric definitions
-- [Deflection and escalation analysis](https://learn.microsoft.com/microsoft-copilot-studio/guidance/deflection-topic-escalation-analysis) — Escalation Rate Drivers
-- [Smart onboarding agent architecture](https://learn.microsoft.com/power-platform/architecture/solution-ideas/onboarding-agent) — **Responsible AI: escalation required; disclose human vs agent**
-
-**Blog posts:**
-
-- [Building a Custom Human-in-the-Loop Experience](https://microsoft.github.io/mcscatblog/posts/human-in-the-loop-custom-connector/) — connectors *"own the delivery channel"*
-- [Design Copilot Studio Agents for Teams](https://microsoft.github.io/mcscatblog/posts/copilot-studio-teams-agent-patterns/) — production patterns with importable YAML
-- [Best Practices for Deploying Agents in Teams](https://microsoft.github.io/mcscatblog/posts/copilot-studio-teams-deployment-ux/) — session persistence, update caching
-- [Register response from custom Adaptive Cards](https://poszytek.eu/en/microsoft-en/office-365-en/powerautomate-en/register-response-from-custom-adaptive-cards-sent-from-power-automate-to-teams/) — community; capturing card submissions
-- [Dynamic Adaptive Cards with Copilot Studio](https://reshmeeauckloo.com/posts/copilotstudio-dynamic-adaptivecard/) — community
-- [Copilot Studio: Create an Agent and Use Adaptive Cards](https://rajeevpentyala.com/2025/07/15/copilot-studio-create-an-agent-and-use-adaptive-cards/) — community
-
-**Working code:**
-
-- [Teams sample: bot-proactive-message](https://github.com/OfficeDev/Microsoft-Teams-Samples/tree/main/samples/TeamsSDK/bot-proactive-message) — runnable proactive-messaging bot
-- [Teams sample: bot-cards](https://github.com/OfficeDev/Microsoft-Teams-Samples/tree/main/samples/TeamsSDK/bot-cards) — card types and actions
-- [microsoft/AdaptiveCards](https://github.com/microsoft/AdaptiveCards) — schema and renderers
-- [Power CAT Copilot Agent Kit](https://github.com/microsoft/Power-CAT-Copilot-Studio-Kit) — Agent Insights Hub, testing, Agent Debugger
-
-**Training:**
-
-- [Build Power Automate flows for your agent](https://learn.microsoft.com/training/modules/build-flows-chatbot-online-workshop/) — topic → flow integration workshop
-- [Enhance Copilot Studio agents](https://learn.microsoft.com/training/modules/enhance-power-virtual-agents-bots/) — calling flows from topics
