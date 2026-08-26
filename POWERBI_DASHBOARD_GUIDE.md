@@ -237,7 +237,7 @@ customEvents
 | extend
     Question          = tostring(customDimensions.question),
     CanAnswer         = tostring(customDimensions.canAnswer),
-    AgentName         = tostring(customDimensions.agentName),
+    AgentLabel        = tostring(customDimensions.agentLabel),
     ConversationId    = tostring(customDimensions.conversationId),
     UserId            = tostring(customDimensions.userId),
     UserName          = tostring(customDimensions.userName),
@@ -247,7 +247,7 @@ customEvents
     OutputTokens      = todouble(customDimensions.outputTokens),
     TotalTokens       = todouble(customDimensions.totalTokens),
     ReasoningTokens   = todouble(customDimensions.reasoningTokens)
-| project timestamp, Question, CanAnswer, AgentName, ConversationId, UserId, UserName,
+| project timestamp, Question, CanAnswer, AgentLabel, ConversationId, UserId, UserName,
           IsNewConversation, DurationMs, InputTokens, OutputTokens, TotalTokens, ReasoningTokens
 ```
 
@@ -600,7 +600,7 @@ columns are populated for only one event type. That is expected, not a bug:
 | Column | `AgentInteractionFailed` | `EmailFailed` |
 |---|---|---|
 | `Question`, `ErrorText` | ✅ | ✅ |
-| `AgentName` | ✅ | ❌ always blank |
+| `AgentLabel` | ✅ | ✅ (blank if the caller sent no label) |
 | `DurationMs` | ✅ | ❌ always blank |
 | `ErrorCode` | ❌ always blank | ✅ Graph HTTP code |
 | `ConversationId`, `UserId`, `UserEmail`, `HrAddress` | ❌ always blank | ✅ |
@@ -613,14 +613,14 @@ customEvents
     EventType      = name,
     Question       = tostring(customDimensions.question),
     ErrorText      = tostring(customDimensions.error),
-    AgentName      = tostring(customDimensions.agentName),
+    AgentLabel     = tostring(customDimensions.agentLabel),
     ErrorCode      = tostring(customDimensions.errorCode),
     ConversationId = tostring(customDimensions.conversationId),
     UserId         = tostring(customDimensions.userId),
     UserEmail      = tostring(customDimensions.userEmail),
     HrAddress      = tostring(customDimensions.hrAddress),
     DurationMs     = todouble(customDimensions.durationMs)
-| project timestamp, EventType, Question, ErrorText, AgentName, ErrorCode,
+| project timestamp, EventType, Question, ErrorText, AgentLabel, ErrorCode,
           ConversationId, UserId, UserEmail, HrAddress, DurationMs
 ```
 
@@ -629,7 +629,7 @@ customEvents
 > nothing else in this guide depends on them being combined.
 
 ⚠️ **`AgentInteractionFailed` cannot be correlated to a conversation or user.** It emits only
-`agentName`, `question`, `error` and `durationMs`. If you need per-user failure analysis, add
+`agentLabel`, `question`, `error` and `durationMs`. If you need per-user failure analysis, add
 `conversationId` and `userId` to that `track_event()` call in `function_app.py` — the values
 are in scope at the point it fires.
 
@@ -1570,7 +1570,7 @@ Exact names emitted by `function_app.py` (case-sensitive).
 |---|---|---|
 | `question` | text | Always captured |
 | `canAnswer` | text | `"true"` / `"false"` |
-| `agentName` | text | |
+| `agentLabel` | text | Caller-supplied display name. Absent when the caller does not send one |
 | `conversationId` | text | Join key |
 | `userId`, `userName` | text | |
 | `isNewConversation` | text | `"true"` / `"false"` |
@@ -1608,7 +1608,7 @@ Emitted when the agent call raises. **Minimal schema — note what is absent.**
 
 | Dimension | Notes |
 |---|---|
-| `agentName` | |
+| `agentLabel` | Caller-supplied display name. Absent when the caller does not send one |
 | `question` | The question that triggered the failure |
 | `error` | Exception text, truncated to 2000 chars |
 | `durationMs` | Numeric. Time until the failure |

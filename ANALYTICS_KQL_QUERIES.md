@@ -7,11 +7,11 @@ interaction and every email send. They land in the **`customEvents`** table.
 
 | Event name | When | Key custom dimensions |
 |---|---|---|
-| `AgentInteraction` | Every call to `agent_httptrigger` | `question` (**always captured**), `canAnswer`, `agentName`, `conversationId`, `userId`, `userName`, `isNewConversation`, `durationMs`, token counts (`inputTokens`, `outputTokens`, `totalTokens`, `reasoningTokens`, `cachedInputTokens`) |
-| `AgentInteractionFailed` | The agent call threw an error | `question`, `error`, `durationMs` |
-| `EmailSent` | HR email delivered successfully | `question`, `userEmail`, `userId`, `userName`, `conversationId`, `hrAddress` (all recipients, comma separated), `graphStatus`, `recipientCount` |
-| `EmailFailed` | HR email failed | `question`, `userEmail`, `errorCode`, `error` |
-| `UserFeedback` | User rates an answer 👍/👎 | `rating` (`positive`/`negative`), `rawRating`, `comment`, `hasComment`, `conversationId`, `userId`, `userName`, `userEmail`, and `question` **only for negative feedback** |
+| `AgentInteraction` | Every call to `agent_httptrigger` | `question` (**always captured**), `canAnswer`, `agentLabel`, `conversationId`, `userId`, `userName`, `isNewConversation`, `durationMs`, token counts (`inputTokens`, `outputTokens`, `totalTokens`, `reasoningTokens`, `cachedInputTokens`) |
+| `AgentInteractionFailed` | The agent call threw an error | `agentLabel`, `question`, `error`, `durationMs` |
+| `EmailSent` | HR email delivered successfully | `question`, `userEmail`, `userId`, `userName`, `conversationId`, `hrAddress` (all recipients, comma separated), `graphStatus`, `recipientCount`, `agentLabel` |
+| `EmailFailed` | HR email failed | `question`, `userEmail`, `errorCode`, `error`, `agentLabel` |
+| `UserFeedback` | User rates an answer 👍/👎 | `rating` (`positive`/`negative`), `rawRating`, `comment`, `hasComment`, `conversationId`, `userId`, `userName`, `userEmail`, `agentLabel`, and `question` **only for negative feedback** |
 
 > Custom dimensions are accessed in KQL as `customDimensions.<name>`.
 > `canAnswer` is stored as the string `"true"` / `"false"`.

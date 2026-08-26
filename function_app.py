@@ -141,9 +141,9 @@ def _truncate(text, limit=8000):
 def normalize_agent_label(agent_label, limit=100):
     """Clean a caller-supplied agent display label for telemetry and subject lines.
 
-    'agent_label' is the user-friendly display name (e.g. "HR Benefits Assistant"),
-    as distinct from 'agent_name', which is the internal codename used to look up
-    or create the agent. Only the label is meant for human-facing output.
+    'agent_label' is the user-friendly display name (e.g. "HR Benefits Assistant")
+    that identifies the agent in analytics and human-facing output. The agent that
+    actually serves the request is selected by the AGENT_ID app setting.
 
     Collapses whitespace (a newline in an email subject or Graph header is
     malformed) and caps the length so an arbitrary caller value cannot produce an
@@ -546,8 +546,6 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
     
     Parameters (query string or JSON body):
         - message: User message to send to the agent (required)
-        - agent_name: Internal codename of the agent to create/look up (optional, defaults to 'AssistantAgent').
-          Accepted only by this function; recorded as the agentName dimension.
         - agent_label: User-friendly display name for the agent (optional, e.g. 'HR Benefits Assistant').
           Recorded as the agentLabel dimension. Accepted by all three functions.
         - instructions: Custom instructions for the agent (optional)
@@ -557,14 +555,13 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
     Environment Variables:
         - AGENT_INSTRUCTIONS_TEMPLATE: Template string with {variable} placeholders (optional)
           Example: "You are an HR assistant. User: {user_name} (ID: {user_id})"
-        - PERSIST_AGENT: Set to 'true' to persist agents by name
-        - AGENT_ID: Specific agent ID to use (overrides PERSIST_AGENT)
+        - AGENT_ID: Name of the Foundry agent to serve requests. This is the only
+          thing that selects the agent; callers cannot override it per request.
     """
     logging.info('Python HTTP trigger function processed a request.')
     _started = time.time()
 
     message = req.params.get('message')
-    agent_name = req.params.get('agent_name')
     agent_label = req.params.get('agent_label')
     instructions = req.params.get('instructions')
     threadid = req.params.get('threadid')
@@ -604,7 +601,6 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
 
         if req_body:
             message = req_body.get('message')
-            agent_name = req_body.get('agent_name')
             agent_label = req_body.get('agent_label')
             instructions = req_body.get('instructions')
             threadid = req_body.get('threadid')
@@ -615,18 +611,15 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps({
                 "error": "Missing required parameter 'message'",
-                "usage": "Provide 'message' in query string or request body. Optional: 'agent_name', 'agent_label', 'instructions', 'threadid'"
+                "usage": "Provide 'message' in query string or request body. Optional: 'agent_label', 'instructions', 'threadid'"
             }),
             status_code=400,
             mimetype="application/json"
         )
 
-    # Set defaults
-    agent_name = agent_name or "AssistantAgent"
-
-    # Display label for telemetry, recorded separately from the codename above.
-    # Deliberately NOT defaulted to agent_name: leaving it empty makes it visible
-    # in analytics which callers are not yet sending a display label.
+    # Display label for telemetry. Deliberately left empty when the caller does
+    # not supply one, so analytics makes visible which callers are not yet
+    # sending a display label.
     agent_label = normalize_agent_label(agent_label)
     
     # Handle instruction templates from environment variables
@@ -660,10 +653,7 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
     endpoint = os.environ.get("AIProjectEndpoint")
     model_deployment = os.environ.get("ModelDeploymentName", "gpt-5.5")
     agent_id = os.environ.get("AGENT_ID")  # Optional: use existing agent instead of creating ephemeral ones
-    
-    # If no AGENT_ID in env but agent_name is provided in request with PERSIST_AGENT=true,
-    # the function will find/create agent by that name
-    
+
     if not endpoint:
         logging.error("AIProjectEndpoint must be set in environment variables.")
         return func.HttpResponse(
@@ -820,7 +810,6 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         _elapsed_ms = int((time.time() - _started) * 1000)
         _params = parameters if isinstance(parameters, dict) else {}
         _props = {
-            "agentName": agent_name,
             "agentLabel": agent_label or None,
             "conversationId": response.conversation.id,
             "userId": _params.get("user_id"),
@@ -859,7 +848,6 @@ def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
         track_event(
             "AgentInteractionFailed",
             properties={
-                "agentName": agent_name,
                 "agentLabel": agent_label or None,
                 "question": _truncate(message),
                 "error": _truncate(str(e), 2000),
