@@ -105,6 +105,7 @@ Every step says where to click and what you should see afterwards.
 | Function App | `func-hrbenefit-dev003` (Flex Consumption, Python) | Three routes; **no change needed** |
 | Existing escalation | "Email HR" via `send_hr_email` | You are adding a *second* choice beside it |
 | Teams Workflows app | Must be **installed and enabled** | Prerequisite for Adaptive Card actions |
+| Browser popups | Must be **allowed** for `[*.]powerautomate.com` and `[*.]microsoft.us` | The Teams connector sign-in is an OAuth popup; blocked popups stop you adding the card action |
 
 ### GCC portal addresses
 
@@ -504,6 +505,28 @@ it to a solution afterwards or the agent will not see it.
 
 ## Step D.3 — Post the card and wait for an answer
 
+> ⚠️ **Before you start: the Teams connector will ask you to sign in.** It uses OAuth, which
+> needs a **popup**. If your browser blocks it, the action cannot be added at all.
+>
+> Add permanent exceptions for **popups** *and* **third-party cookies** covering:
+>
+> ```
+> [*.]powerautomate.com
+> [*.]microsoft.us
+> ```
+>
+> The second entry matters in GCC — you are on `gov.flow.microsoft.us`, so a rule covering
+> only `powerautomate.com` will not help. Dismissing the browser's one-off "popup blocked"
+> prompt is not enough; it will block again on the next connector.
+>
+> If the popup opens but sign-in loops or fails, **sign out inside the popup, then sign back
+> in within that same window** — a documented quirk of OAuth connectors.
+>
+> ⚠️ **The account you sign in with becomes the connection's identity.** It does not affect
+> anonymity (this build never posts as `User`), but that account must be able to post to the
+> HR channel, and it should not be one that might be deprovisioned. A shared or service
+> account is safer if your tenant allows it.
+
 1. Click **+ New step**.
 2. Search for **Post an adaptive card to a Teams channel and wait for a response**.
 
@@ -511,8 +534,35 @@ it to a solution afterwards or the agent will not see it.
    collect input — Microsoft documents that non-waiting cards *"return an error for all
    button actions except OpenURL."*
 
-3. Set **Team** and **Channel** to the channel from Step D.1.
-4. In **Message**, paste this Adaptive Card JSON:
+3. Set **Post as** to **`Flow bot`**.
+4. Set **Post in** to **`Channel`**.
+5. Set **Team** and **Channel** to the channel from Step D.1.
+
+> ⚠️ **`Post as` must be `Flow bot` here, not `Microsoft Copilot Studio agent`.** Agent
+> identity is only supported for posting into a **personal chat with the agent** — not into a
+> channel.
+>
+> **The symptom if you get this wrong:** `Post in` collapses from a dropdown into a
+> **free-text box**, because the designer has no valid channel list to offer. *(Confirmed
+> against the product, not just the docs.)*
+>
+> **Do not paste a channel ID into that box.** It is the connector degrading, not a
+> workaround, and you would be relying on an unsupported combination.
+>
+> **This costs you nothing.** Only HR sees this card. Anonymity comes from how the answer
+> returns *to the employee* — as the flow's return value, spoken by the agent in
+> [Step D.5](#step-d5--return-the-answer-to-the-agent) — not from how the card reaches HR. The
+> employee never sees the Flow bot at all.
+
+> ⚠️ **`Post as` must never be `User`** on any Teams action in this flow. That sends the
+> message as the account signed in to the Teams connector — usually the flow owner — and
+> anonymity is lost immediately.
+
+> 💡 **If the Channel dropdown is empty or your channel is missing**, it is almost certainly
+> private or shared. Bots cannot post to either — it must be a **standard** channel
+> ([Step D.1](#step-d1--create-the-hr-intake-channel)).
+
+6. In **Message**, paste this Adaptive Card JSON:
 
 ```json
 {
@@ -603,13 +653,13 @@ it to a solution afterwards or the agent will not see it.
 > This matters because your HR channel will accumulate **many similar-looking cards**.
 > Details: [Submit button behavior with consecutive cards](https://learn.microsoft.com/microsoft-copilot-studio/authoring-ask-with-adaptive-card#submit-button-behavior-for-agents-with-consecutive-cards).
 
-5. Set **Update message** to: `Answer sent to the employee.`
+7. Set **Update message** to: `Answer sent to the employee.`
 
 ⚠️ Configure the update message. Without it the card resets and looks unanswered, and a
 second representative will answer the same question.
 
-✅ **Checkpoint:** the card action has a multiline text input plus a submit button, and an
-**Update message** is configured.
+✅ **Checkpoint:** **Post as** is `Flow bot`, **Post in** is `Channel`, the card has a
+multiline text input plus a submit button, and an **Update message** is configured.
 
 ---
 
@@ -881,6 +931,10 @@ If the long-wait test in [Step D.7](#step-d7--publish-and-test-end-to-end) shows
    which is exactly the failure mode in question. The costs: the employee must still have the
    agent **installed** (delivery fails with status `100` otherwise), and proactive messages
    *"don't appear in conversation transcripts or analytics session data."*
+
+   💡 **Agent identity works here but not in [Step D.3](#step-d3--post-the-card-and-wait-for-an-answer)** —
+   because this posts to a **personal chat**, which is the only destination
+   `Microsoft Copilot Studio agent` supports. The channel card must use `Flow bot`.
 
    ⚠️ `Post as` must **never** be `User` — that sends the message as the account signed in to
    the Teams connector, usually the flow owner, and anonymity is lost immediately.
@@ -1188,6 +1242,8 @@ customEvents
 | Auth prompt or failure on the delivering turn | **Connector tokens can expire during long Teams threads** | Documented Teams risk; have the employee reauthenticate, or shorten the wait window |
 | Agent behaves oddly in a long-lived thread | Teams keeps conversation history indefinitely; context accumulates | `/debug clearstate` in the Teams chat resets conversation state |
 | Card posts, but buttons error | Used the plain "post" action | Use **"…and wait for a response"** |
+| **Post in** is a free-text box instead of a dropdown | **Post as** is set to `Microsoft Copilot Studio agent`, which only supports personal chats | Set **Post as** to `Flow bot` ([Step D.3](#step-d3--post-the-card-and-wait-for-an-answer)). Do not paste a channel ID into the text box |
+| Sign-in popup blocked when adding the Teams action | The connector uses OAuth and needs a popup | Allow popups **and** third-party cookies for `[*.]powerautomate.com` and `[*.]microsoft.us`, then retry. If sign-in loops, sign out *inside* the popup and back in within the same window |
 | Card never appears | **Private or shared channel** (bots are not supported in either), or Workflows app not enabled | Use a **standard** channel — the team's own privacy setting is irrelevant. Check the Workflows app in Teams admin center |
 | Reps say cards render oddly or replies look out of order | Channel is on the **Threads** layout, or reps are mid-rollout with **mixed views** | Switch the channel to **Posts** ([Step D.1](#step-d1--create-the-hr-intake-channel)). Teams warns that mixed views can disconnect messages from threads and affect notifications |
 | Reps miss new cards despite notifications being on | Threads layout — thread replies do **not** bold the channel name, by design | Use the **Posts** layout; there is no setting to change the Threads behaviour |
@@ -1406,10 +1462,11 @@ these for the recommended build.
 | **Configure run after** | The per-action setting controlling which predecessor outcomes (succeeded / failed / timed out) allow an action to run. Used to build the timeout branch |
 | **Copilot Credits** | The usage meter agent flows consume. Exhausting the environment's capacity **blocks new agent flow runs** |
 | **`FlowActionTimedOut`** | The error when a flow fails to answer the agent within 100 seconds. Under this build it means **Asynchronous response is Off** |
-| **Flow bot** | The generic bot identity Power Automate uses for messages not tied to a person *(only relevant if you fall back to proactive delivery)* |
+| **Flow bot** | The generic bot identity Power Automate posts as when a message is not tied to a person. **Used by this build** to post the card into the HR channel ([Step D.3](#step-d3--post-the-card-and-wait-for-an-answer)) — the employee never sees it |
 | **GCC** | Government Community Cloud. **Not** the same as GCC High |
 | **ISO 8601 duration** | A timeout format. `PT8H` = 8 hours, `PT5M` = 5 minutes |
 | **Maker** | Someone permitted to build agents and flows |
+| **Post as** / **Post in** | The two Teams-connector settings controlling sender identity and destination. This build uses **`Flow bot`** + **`Channel`**. `Microsoft Copilot Studio agent` supports personal chats only; `User` would expose the flow owner and must never be used |
 | **Proactive message** | A message an agent sends without the user prompting it. Not used by this build — only by the [fallback](#alternatives-worth-knowing-about) if long waits fail |
 | **RFI** | Request for information — a built-in pause-and-ask-a-human action that emails reviewers instead of posting a card. See [Alternatives](#alternatives-worth-knowing-about) |
 | **Solution** | A Power Platform container; flows must be in one to be callable by an agent |
