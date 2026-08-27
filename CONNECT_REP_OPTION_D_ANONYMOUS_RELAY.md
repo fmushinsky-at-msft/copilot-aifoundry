@@ -859,11 +859,33 @@ This is the same authentication dependency your `send_hr_email` feature already 
 does not return until a human answers, so a node placed *after* the call will not run until
 then.
 
-5. Add a **Send a message** node **after** the flow call that displays the flow's `Answer`
-   output.
+5. Add a **Send a message** node **after** the flow call, and insert the flow's `Answer`
+   output into it:
+
+   - Click the **`{x}`** (insert variable) icon in the message box — Copilot Studio uses this,
+     **not** the lightning bolt you saw in Power Automate.
+   - Pick the **`Anonymous HR Relay`** output, usually shown as `Answer` or `Topic.Answer`.
+   - Alternatively switch the message to **Formula** (`fx`) mode and type the variable name.
+
+⚠️ **Send the variable on its own — do not re-add the disclosure wording.** The
+`💬 Answered by a person on the HR benefits team` label is already inside the flow's `Answer`
+value from [Step D.5](#step-d5--return-the-answer-to-the-agent). Adding it here too means the
+employee sees it twice.
+
+> 💡 **If `Answer` does not appear in the picker**, work through these in order:
+>
+> | Symptom | Fix |
+> |---|---|
+> | No outputs listed at all | Reload the Copilot Studio page — the tool schema is cached |
+> | Still nothing after reload | The flow was not **published** after its outputs were added. Publish it in Power Automate, then reload |
+> | Listed but greyed out or stale | On the tool node, click **…** → **Refresh** to re-read the schema |
+>
+> ⚠️ **Check both response actions expose an output named exactly `Answer`.** If the timeout
+> branch named it differently, Copilot Studio may show no output at all, or fail with
+> `FlowActionBadRequest` when it maps the result.
 
 ✅ **Checkpoint:** the branch says "I've sent your question", calls the flow, and then shows
-the `Answer` output when it eventually returns.
+the `Answer` output — already carrying its label — when it eventually returns.
 
 ---
 
@@ -1274,6 +1296,8 @@ customEvents
 | Employee never gets a reply, flow still running | No response action on the branch that ran | Every branch must end in **Respond to the agent** with the same outputs |
 | Answer arrives blank | Returned `submitActionId` instead of `answer` | Map the `Answer` output to the **`answer`** value |
 | No `answer` token in the lightning-bolt picker | Card JSON is pasted content, so the designer cannot infer its schema — only **Body** is offered | Use the **`fx`** expression button instead ([Step D.5](#step-d5--return-the-answer-to-the-agent)). Do not select **Body** |
+| Flow's `Answer` output missing in Copilot Studio | Flow not published after outputs were added, or the tool schema is cached | Publish the flow, reload Copilot Studio, then **…** → **Refresh** on the tool node ([Step D.6](#step-d6--wire-the-flow-into-the-topic)) |
+| Employee sees the "Answered by a person" label twice | Disclosure wording added in **both** the flow output and the topic message | Keep it only in the flow's `Answer` value; the topic node should send the variable alone |
 | Answer arrives as raw JSON | Selected **Body** from the picker | Replace with the `fx` expression targeting the `answer` value |
 | Answer never arrives after a long wait; run shows Succeeded | Possible callback expiry — undocumented | Test at your target duration; see [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) |
 | Escalation stops working but the agent still answers normally | **Copilot Studio capacity exhausted** — new agent flow runs are blocked while the parent agent keeps working | Check **Agent flow actions** in the Power Platform admin center; reallocate credits or enable pay-as-you-go |
