@@ -782,10 +782,21 @@ a human answered** is not.
 Because a timed-out card action **fails**, the success path above is skipped when nobody
 answers. You need a second response action that runs *only* on that path.
 
-7. Add a **second Respond to the agent** action.
-8. Click its **…** menu → **Configure run after**.
-9. Tick **has timed out** and **has failed**; untick **is successful**.
-10. Give it the **same output name** — `Answer` — with a timeout message as its value:
+⚠️ **This is a parallel branch, not the next step in the chain.** Both response actions hang
+off the **card action**. Do not add the second one after the first.
+
+7. Hover the **`+`** on the connector **directly below the card action** — the same connector
+   that leads to your first **Respond to the agent**.
+8. Choose **Add a parallel branch**, *not* **Add an action**.
+
+   > 💡 If your designer does not offer "Add a parallel branch," add the action anywhere after
+   > the card and then set its **Configure run after** — the branch shape follows from the
+   > run-after configuration.
+
+9. In the new branch, add a second **Respond to the agent**.
+10. On that action: **…** → **Configure run after** → tick **has timed out** and
+    **has failed**; untick **is successful**.
+11. Give it the **same output name** — `Answer` — with a timeout message as its value:
 
     ```
     🤖 **Automated message**
@@ -797,21 +808,31 @@ answers. You need a second response action that runs *only* on that path.
 ⚠️ **Mark this one as automated.** It arrives through the same mechanism as the human answer,
 so without a label an employee will read it as something a person typed.
 
-11. Turn **Asynchronous response** **On** for this action too.
-12. Rename the flow to `Anonymous HR Relay` and click **Save**.
+12. Turn **Asynchronous response** **On** for this action too.
+13. Rename the flow to `Anonymous HR Relay` and click **Save**.
 
-Flow shape:
+Flow shape — note the **two arrows leaving the card action**:
 
 ```
 Post adaptive card AND WAIT
     |
     +-- (is successful) ----► Respond to the agent  [async On]
-    |                          Answer = "💬 Answered by a person..." + <answer token>
+    |                          Answer = "💬 Answered by a person..." + <fx expression>
     |
     +-- (has timed out /
          has failed) --------► Respond to the agent  [async On]
                                Answer = "🤖 Automated message..."
 ```
+
+✅ **Verify the shape on the canvas.** The card action should have **two arrows leaving it**.
+If you see a single vertical chain instead, the second response action was added
+sequentially — delete it and re-add it as a parallel branch.
+
+⚠️ **What goes wrong if it is sequential.** The second action inherits the *first response
+action* as its predecessor rather than the card. When someone answers, both fire and the
+employee gets the real answer followed by "nobody answered." When nobody answers, the first is
+skipped and the second evaluates its condition against a skipped action, so neither may run.
+Both look correct on the canvas, which makes them slow to diagnose.
 
 > ⚠️ **Every branch must respond, and with the same outputs.** Microsoft: the response action
 > *"can be used at multiple branches in the flow, but must have the same outputs at each
@@ -1301,7 +1322,8 @@ customEvents
 | Answer arrives as raw JSON | Selected **Body** from the picker | Replace with the `fx` expression targeting the `answer` value |
 | Answer never arrives after a long wait; run shows Succeeded | Possible callback expiry — undocumented | Test at your target duration; see [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) |
 | Escalation stops working but the agent still answers normally | **Copilot Studio capacity exhausted** — new agent flow runs are blocked while the parent agent keeps working | Check **Agent flow actions** in the Power Platform admin center; reallocate credits or enable pay-as-you-go |
-| Nobody answered and the employee got no message at all | Timeout branch missing or **Configure run after** not set | Add the second response action on **has timed out / has failed** ([Step D.5](#step-d5--return-the-answer-to-the-agent)) |
+| Nobody answered and the employee got no message at all | Timeout branch missing, added **sequentially** instead of as a parallel branch, or **Configure run after** not set | The second response action must branch off the **card action**, not follow the first response action ([Step D.5](#step-d5--return-the-answer-to-the-agent)) |
+| Employee gets the real answer **and then** "nobody answered" | Second response action was added sequentially, so both fire | Re-add it as a **parallel branch** off the card action |
 | Auth prompt or failure on the delivering turn | **Connector tokens can expire during long Teams threads** | Documented Teams risk; have the employee reauthenticate, or shorten the wait window |
 | Agent behaves oddly in a long-lived thread | Teams keeps conversation history indefinitely; context accumulates | `/debug clearstate` in the Teams chat resets conversation state |
 | Card posts, but buttons error | Used the plain "post" action | Use **"…and wait for a response"** |
