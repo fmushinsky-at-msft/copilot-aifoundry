@@ -410,18 +410,58 @@ with the Workflows app installed**. Workflows is available in **GCC** (but not G
 DoD). If cards never appear, verify the Workflows app is enabled in your Teams admin center
 before debugging the flow itself.
 
-1. In Teams, go to the HR team.
+1. In Teams, go to the HR team — **the team itself can be public or private; it makes no
+   difference.** Most HR teams are private, and that is fine.
 2. Click **⋯** next to the team name → **Add channel**.
 3. Name it, e.g. `Benefits Questions (Anonymous Relay)`.
 4. Choose **Standard**.
 
-⚠️ **Standard, not private.** Microsoft documents that posting as a Flow bot in **private
-channels** is *"under development."* Shared and standard channels are supported. Choosing
-private here will cost you hours of debugging.
+> ⚠️ **The constraint is on the *channel type*, not the team's privacy setting.** These are two
+> unrelated settings, and it is easy to read the warning below as applying to the team.
+>
+> | Setting | What it controls | Does it affect this build? |
+> |---|---|---|
+> | **Team privacy** (public / private) | Who can join the team | ❌ No — a private team is fine |
+> | **Channel type** (standard / private / shared) | Who in the team sees the channel | ✅ **Yes — must be standard** |
+>
+> A **standard channel inside a private team** is exactly what you want: only HR team members
+> can see it, and the flow can post to it.
 
-5. Add the HR representatives as members.
+⚠️ **Why standard and not private or shared.** Microsoft's channel feature comparison lists
+**bots, connectors, and messaging extensions** as supported in standard channels only — *not*
+in private or shared channels. The Teams connector documentation states the same from the
+other side: *"Sending a message in private channels isn't supported."* Choosing either will
+cost you hours of debugging a flow that is actually correct.
 
-✅ **Checkpoint:** the channel exists, is standard, and you can post in it manually.
+5. Add the HR representatives as members **of the team**. In a standard channel, every team
+   member automatically has access — there is no separate channel membership to manage.
+6. Set the channel layout to **Posts**, not Threads: **⋯** next to the channel name →
+   **Edit channel** → under **Layout**, choose **Posts** → **Save**. If you see no Layout
+   option, your tenant only has Posts and there is nothing to do.
+
+> 💡 **Why Posts rather than Threads — and how firm this is.** Unlike the standard/private
+> rule above, this is a **preference, not a documented constraint.** Microsoft publishes
+> nothing saying Adaptive Cards fail in the Threads layout. Three reasons to prefer Posts
+> anyway:
+>
+> 1. **It is what every tutorial assumes.** Microsoft's post-card-and-wait walkthrough, the
+>    screenshots, and the community write-ups in [References](#references) were all authored
+>    against Posts. If something renders oddly, you want to be on the well-trodden path.
+> 2. **Threads is still rolling out and is not universally available.** It began rolling out
+>    in mid-2025 and is absent from some tenants and account types. There are documented cases
+>    of it appearing and then disappearing again.
+> 3. **Mixed views break notifications.** During a partial rollout, Teams itself warns:
+>    *"Some people in this channel have a different view from you. Some messages may appear
+>    out of order and disconnected from a thread. This may impact notifications."* For an
+>    intake queue where reps must notice new questions, that is the wrong risk to take.
+>
+> There is also a by-design notification difference in Threads: replies inside a thread do
+> **not** bold the channel name in the left navigation, and Microsoft states there is no
+> setting to change it. New cards arrive as new top-level posts, so they should still bold —
+> but the follow-up behaviour around an answered card is less predictable.
+
+✅ **Checkpoint:** the channel exists, is **standard** (no lock icon next to its name), uses
+the **Posts** layout, and you can post in it manually.
 
 ---
 
@@ -1148,7 +1188,9 @@ customEvents
 | Auth prompt or failure on the delivering turn | **Connector tokens can expire during long Teams threads** | Documented Teams risk; have the employee reauthenticate, or shorten the wait window |
 | Agent behaves oddly in a long-lived thread | Teams keeps conversation history indefinitely; context accumulates | `/debug clearstate` in the Teams chat resets conversation state |
 | Card posts, but buttons error | Used the plain "post" action | Use **"…and wait for a response"** |
-| Card never appears | Private channel, or Workflows app not enabled | Use a **standard** channel; check the Workflows app in Teams admin center |
+| Card never appears | **Private or shared channel** (bots are not supported in either), or Workflows app not enabled | Use a **standard** channel — the team's own privacy setting is irrelevant. Check the Workflows app in Teams admin center |
+| Reps say cards render oddly or replies look out of order | Channel is on the **Threads** layout, or reps are mid-rollout with **mixed views** | Switch the channel to **Posts** ([Step D.1](#step-d1--create-the-hr-intake-channel)). Teams warns that mixed views can disconnect messages from threads and affect notifications |
+| Reps miss new cards despite notifications being on | Threads layout — thread replies do **not** bold the channel name, by design | Use the **Posts** layout; there is no setting to change the Threads behaviour |
 | Card looks unanswered after submitting | **Update message** not configured | Set **Update message** ([Step D.3](#step-d3--post-the-card-and-wait-for-an-answer)) |
 | Two reps answer the same question | First response wins; card reset | Configure the update message; brief the team |
 | `OperationTimedOut` | Nobody answered | Expected — the timeout path handles it ([Step D.4](#step-d4--add-a-timeout-path)) |
@@ -1303,6 +1345,8 @@ Everything bearing on [the one open question](#the-unresolved-risk--the-flow-out
 | [Add user authentication to topics](https://learn.microsoft.com/microsoft-copilot-studio/advanced-end-user-authentication) | Why those variables are empty without **Authenticate with Microsoft** |
 | [Channel experience reference table](https://learn.microsoft.com/microsoft-copilot-studio/publication-fundamentals-publish-channels#channel-experience-reference-table) | **Six-option cap** on multiple choice in Teams |
 | [Plan for government clouds](https://learn.microsoft.com/microsoftteams/platform/concepts/cloud-overview) | Workflows app available in GCC, not GCC High/DoD |
+| [Teams channel feature comparison](https://learn.microsoft.com/microsoftteams/teams-channels-overview#channel-feature-comparison) | **Bots and connectors are standard-channel only** — the constraint behind [Step D.1](#step-d1--create-the-hr-intake-channel). Team privacy is a separate setting |
+| [Channel resource type — `layoutType`](https://learn.microsoft.com/graph/api/resources/channel) | Confirms **Posts** and **Threads** (`post` / `chat`) are the two layouts, and that either can be set per channel |
 
 ### Tier 6 — transparency and escalation design
 
