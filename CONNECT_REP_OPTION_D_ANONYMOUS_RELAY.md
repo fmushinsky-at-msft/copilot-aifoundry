@@ -609,13 +609,18 @@ it to a solution afterwards or the agent will not see it.
 >
 > This is the part beginners most often get stuck on.
 >
-> **The `id` of an `Input.Text` becomes the name of the dynamic-content token.** In the card
-> above the input is `"id": "answer"`, so after the card action a dynamic value named
-> **`answer`** appears in the lightning-bolt picker. That is what you return to the agent in
+> **The `id` of an `Input.Text` is what identifies the value in the card's response.** In the
+> card above the input is `"id": "answer"`, so the submitted text comes back under that name
+> in the action's output.
+>
+> ⚠️ **You will not find it in the lightning-bolt picker.** *(Confirmed against the product.)*
+> Because the card is pasted in as JSON, the designer cannot infer its schema and offers only
+> a generic **Body**. You retrieve the value with an **`fx` expression** instead — see
 > [Step D.5](#step-d5--return-the-answer-to-the-agent).
 >
 > Microsoft's [lead collection sample](https://learn.microsoft.com/power-automate/lead-collection-sample)
-> shows the same mechanism: each `Input.Text` `id` becomes a "Response **output**" token.
+> shows the same `id`-to-output mechanism, but with a card built through the designer rather
+> than pasted JSON — which is why its tokens appear and yours do not.
 >
 > ⚠️ **`submitActionId` is different.** Microsoft's proactive-card documentation says *"To use
 > the response from the recipient, select **submitActionId**… the value of this variable is
@@ -698,17 +703,49 @@ speaks it.
 1. Add a **Respond to the agent** action at the **end** of the flow (search the **Copilot**
    connector).
 2. Add one text output named `Answer`.
-3. Set its value to text that **discloses a human wrote it**, with the card's `answer` token
-   embedded — use the lightning-bolt picker to insert the token:
+3. Set its value to text that **discloses a human wrote it**, with the card's answer embedded:
 
    ```
    💬 **Answered by a person on the HR benefits team**
 
-   <the "answer" output from the adaptive card>
+   <the answer from the adaptive card — inserted as an expression, see below>
 
    —
    Individual responders are not identified. If you need more help, just ask me again.
    ```
+
+> ⚠️ **The lightning-bolt picker will not offer an `answer` token.** *(Confirmed against the
+> product.)* Because the card JSON is pasted in as content, the designer cannot infer the
+> card's input schema — it lists only a generic **Body** under the card action.
+>
+> **Do not select `Body`.** That inserts the whole JSON object.
+>
+> **Use the `fx` (expression) button instead**, next to the lightning bolt. Place the cursor
+> where the answer belongs, click **`fx`**, and enter:
+>
+> ```
+> body('Post_adaptive_card_and_wait_for_a_response')?['data']?['answer']
+> ```
+>
+> The action name must match yours exactly, with spaces replaced by underscores. **Code view**
+> on the action shows the exact internal name.
+
+> ⚠️ **Verify the path against a real run before you rely on it.** The exact shape of the
+> response is not documented, and `answer` may sit at the top of `body` rather than under
+> `data`:
+>
+> 1. **Save draft**, then **Test** the flow, supplying the four inputs manually.
+> 2. Answer the card when it posts to your HR channel.
+> 3. Open the run under **Activity**, expand the card action, and view **raw outputs**.
+>
+> The JSON there gives you the exact path. If `data` is absent, use
+> `body('Post_adaptive_card_and_wait_for_a_response')?['answer']`.
+>
+> 💡 Test runs **do not consume Copilot Credits**, so this costs nothing.
+
+> 💡 **Worth trying first:** save the flow, reload the designer, and re-open the picker. The
+> schema is occasionally populated after a save. If an `answer` token appears, use it — the
+> expression works either way.
 
 > 💡 **Why the label matters more under async.** The reply now arrives as an ordinary agent
 > message, visually identical to model-generated answers. See
@@ -1235,7 +1272,9 @@ customEvents
 | Agent replies instantly with an empty answer | Environment does not actually support async, so it returned "flow completed" early | Verify `environmentFlowHostingType` is `SelfHostMultiTenant` |
 | `Error code: 3000` | Async is On but the environment is on old infrastructure | Same check as above; if `LogicApps`, async is unavailable |
 | Employee never gets a reply, flow still running | No response action on the branch that ran | Every branch must end in **Respond to the agent** with the same outputs |
-| Answer arrives blank | Returned `submitActionId` instead of `answer` | Map the `Answer` output to the **`answer`** token |
+| Answer arrives blank | Returned `submitActionId` instead of `answer` | Map the `Answer` output to the **`answer`** value |
+| No `answer` token in the lightning-bolt picker | Card JSON is pasted content, so the designer cannot infer its schema — only **Body** is offered | Use the **`fx`** expression button instead ([Step D.5](#step-d5--return-the-answer-to-the-agent)). Do not select **Body** |
+| Answer arrives as raw JSON | Selected **Body** from the picker | Replace with the `fx` expression targeting the `answer` value |
 | Answer never arrives after a long wait; run shows Succeeded | Possible callback expiry — undocumented | Test at your target duration; see [The unresolved risk](#the-unresolved-risk--the-flow-outlives-the-conversation) |
 | Escalation stops working but the agent still answers normally | **Copilot Studio capacity exhausted** — new agent flow runs are blocked while the parent agent keeps working | Check **Agent flow actions** in the Power Platform admin center; reallocate credits or enable pay-as-you-go |
 | Nobody answered and the employee got no message at all | Timeout branch missing or **Configure run after** not set | Add the second response action on **has timed out / has failed** ([Step D.5](#step-d5--return-the-answer-to-the-agent)) |
@@ -1470,7 +1509,7 @@ these for the recommended build.
 | **Proactive message** | A message an agent sends without the user prompting it. Not used by this build — only by the [fallback](#alternatives-worth-knowing-about) if long waits fail |
 | **RFI** | Request for information — a built-in pause-and-ask-a-human action that emails reviewers instead of posting a card. See [Alternatives](#alternatives-worth-knowing-about) |
 | **Solution** | A Power Platform container; flows must be in one to be callable by an agent |
-| **Token** (dynamic content) | A value produced by an earlier action, inserted via the lightning-bolt picker. The card's `Input.Text` `id` becomes its token name |
+| **Token** (dynamic content) | A value produced by an earlier action, inserted via the lightning-bolt picker. ⚠️ Values from a **pasted** Adaptive Card do not appear as tokens — retrieve them with an **`fx`** expression |
 | **Topic** | A conversation script |
 | **Update message** | The text replacing the card after submission, so a second rep does not answer the same question |
 | **UPN** | User Principal Name — usually the sign-in email address |
