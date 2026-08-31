@@ -52,6 +52,7 @@ Every step says where to click and what you should see afterwards.
 - [A note on Power Automate licensing](#a-note-on-power-automate-licensing)
 - [Background — how the current feature works](#background--how-the-current-feature-works)
 - [How the relay works](#how-the-relay-works)
+- [How the agent keeps answering while the flow waits](#how-the-agent-keeps-answering-while-the-flow-waits)
 - [Why not return the answer from the flow?](#why-not-return-the-answer-from-the-flow)
 - [What proactive delivery requires](#what-proactive-delivery-requires)
 - [Step D.1 — Create the HR intake channel](#step-d1--create-the-hr-intake-channel)
@@ -235,29 +236,168 @@ The Function App exposes exactly three routes:
 
 ## How the relay works
 
+### The flow, block by block
+
+Every block below is one action in Power Automate. There are **six**, and the two delivery
+actions are *parallel branches* off the card — not a straight line.
+
 ```
-Employee (Teams)
-	|  asks a question; agent cannot answer
-	v
-Copilot Studio topic
-	|  says "I've sent your question to HR", then calls the flow
-	|  — and ENDS. The agent is free again immediately.
-	v
-FLOW  (no "Respond to the agent" action)
-	|
-	+--► posts an Adaptive Card into the HR channel
-	|         "...and wait for a response"          (may take hours)
-	|                                   |
-	|     an HR rep types the answer ───+
-	|
-	+--► Post message in a chat or channel
-			  Post as: Microsoft Copilot Studio agent
-			  Post in: Chat with agent
-			  Recipient: the employee
+┌─────────────────────────────────────────────────────────────────────┐
+│  1  TRIGGER   "When an agent calls the flow"                        │
+│               Inputs:  Question · UserEmail · UserName ·            │
+│                        ConversationId                               │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+                               v
+┌─────────────────────────────────────────────────────────────────────┐
+│  2  TEAMS     "Post adaptive card and wait for a response"          │
+│               Post as : Flow bot          ← channel needs Flow bot  │
+│               Post in : Channel           ← the HR intake channel   │
+│               Timeout : PT8H                                        │
+│                                                                     │
+│               ⏸  THE FLOW PAUSES HERE — minutes or hours            │
+│                  (the agent is NOT waiting; see below)              │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+              ┌────────────────┴────────────────┐
+              │                                 │
+     is successful                     has timed out
+     (a rep answered)                  OR has failed
+              │                                 │
+              v                                 v
+┌──────────────────────────────┐  ┌──────────────────────────────────┐
+│  3  TEAMS                    │  │  4  TEAMS                        │
+│  "Post message in a chat     │  │  "Post message in a chat         │
+│   or channel"                │  │   or channel"                    │
+│                              │  │                                  │
+│  Post as  : Copilot Studio   │  │  Post as  : Copilot Studio       │
+│             agent            │  │             agent                │
+│  Post in  : Chat with agent  │  │  Post in  : Chat with agent      │
+│  Recipient: UserEmail        │  │  Recipient: UserEmail            │
+│                              │  │                                  │
+│  Message:                    │  │  Message:                        │
+│   💬 Answered by a person    │  │   🤖 Automated message           │
+│   + fx(card answer)          │  │   "Nobody answered yet…"         │
+│                              │  │                                  │
+│  Advanced options:           │  │  Advanced options: same          │
+│   not installed → succeed    │  │                                  │
+│   chat active   → SEND       │  │  Run after: has timed out        │
+│                              │  │             + has failed         │
+└──────────────┬───────────────┘  └──────────────────────────────────┘
+               │
+               v
+      status 200 / 100 / 300
+               │
+               v
+┌─────────────────────────────────────────────────────────────────────┐
+│  5  (optional)  Log the delivery status  →  telemetry               │
+│                 100 = lost answer, needs an email fallback          │
+└─────────────────────────────────────────────────────────────────────┘
+
+        ✗  NO "Respond to the agent" action anywhere in this flow.
+           That absence is the whole design — see below.
+```
+
+### End to end, including the people
+
+```
+Employee (Teams)                                  HR channel (Teams)
+      │                                                   │
+      │ "What's my dental deductible?"                     │
+      v                                                    │
+ Copilot Studio topic                                       │
+      │  1. sends "I've sent your question to HR…"          │
+      │  2. calls the flow  ──────────────────────────────► │ card appears
+      │  3. TOPIC ENDS  ← agent is free again (< 1 second)  │
+      v                                                    │
+ ✅ agent answers other questions normally            (hours pass)
+      ▲                                                    │
+      │                                        a rep types the answer
+      │                                                    │
+      │        proactive message, sent AS THE AGENT         │
+      └────────────────────────────────────────────────────┘
+                💬 "Answered by a person on the HR team…"
 ```
 
 The employee sees a message from **the agent**. The representative's name appears nowhere in
-what the employee receives — and the agent keeps answering other questions the whole time.
+what the employee receives.
+
+---
+
+## How the agent keeps answering while the flow waits
+
+This is the part that surprises people, and it is the reason the build is shaped this way.
+
+### The key idea: the flow is *fired*, not *awaited*
+
+A Power Automate flow and a Copilot Studio conversation are **two separate processes**. What
+determines whether the agent blocks is not how long the flow runs — it is **whether the topic
+is waiting for the flow to return something**.
+
+| | Topic waits for a return value | Topic does not (this build) |
+|---|---|---|
+| Flow has `Respond to the agent`? | Yes | **No** |
+| What the topic does after calling | Stays open, holding the conversation | Ends immediately |
+| Agent while the card is pending | ❌ Parked in the escalation topic | ✅ Free for any other topic |
+| How the answer gets back | The flow's return value | A separate proactive message |
+
+Because this flow has **no response action**, Copilot Studio has nothing to wait for. It hands
+the request off and the topic reaches its end — typically in under a second. From the agent's
+point of view the escalation is *finished* the moment the card is posted.
+
+The flow, meanwhile, is still sitting at block 2. Those two facts are not in conflict: the
+flow's run and the conversation's turn are simply unrelated after the hand-off.
+
+### Walking through a real interleaving
+
+```
+ t+0s     Employee: "What's my dental deductible?"
+          Agent cannot answer → escalation topic runs
+          Topic: "I've sent your question to HR…"
+          Topic calls flow  ──►  FLOW STARTS
+ t+1s     TOPIC ENDS.  Conversation released.        FLOW: waiting at block 2
+          │                                          │
+ t+30s    Employee: "How many PTO days do I get?"    │  still waiting
+          ✅ Agent answers normally — different       │
+             topic, unaffected                       │
+          │                                          │
+ t+5m     Employee: "What about vision coverage?"    │  still waiting
+          ✅ Agent answers normally                   │
+          │                                          │
+ t+3h                                          HR rep answers the card
+          │                                          │  FLOW RESUMES
+          │                                          v
+          │                                    block 3 runs
+          │  ◄──── proactive message ──────────────  │
+ t+3h     💬 "Answered by a person on the HR team…"   FLOW ENDS
+```
+
+At no point does the employee wait, and at no point is the agent unavailable.
+
+### Why the answer can still find them hours later
+
+The proactive message does **not** reply into the old topic — that topic ended at `t+1s` and no
+longer exists. Instead the flow starts a **fresh turn** in the employee's personal chat with
+the agent, addressed by `UserEmail`. This is why:
+
+- the wait can exceed any conversation or session limit — there is no conversation to expire;
+- the employee can have chatted about ten other things in between;
+- the message must carry its own 💬 label, because it arrives with no surrounding context.
+
+⚠️ **The trade-off this creates.** Because delivery is a new turn rather than a reply, it
+depends on the employee still having the agent installed, and it does not appear in Copilot
+Studio transcripts. Both are covered under
+[What proactive delivery requires](#what-proactive-delivery-requires).
+
+### What this does *not* protect against
+
+Two employees escalating at once produce **two independent flow runs** — they do not interfere.
+But note what the design does *not* do:
+
+- ❌ It does not let the employee *follow up* on the answer in context. The message arrives as
+  a fresh turn; a follow-up question starts a new escalation.
+- ❌ It does not guarantee ordering. If someone escalates twice, answers may arrive in either
+  order, which is why the message quotes enough context to stand alone.
 
 ---
 
@@ -295,7 +435,7 @@ conversation — for hours — is worse than the costs of proactive delivery.
 | Answer appears in Copilot Studio analytics | ✅ | ❌ Excluded from transcripts |
 | Employee must have the agent installed | Not required | ✅ Required — true here, they just used it |
 | Delivery status codes to handle | None | `200` / `100` / `300` |
-| Long-wait delivery | ⚠️ Undocumented whether callbacks expire | ✅ Designed for out-of-conversation delivery |
+| Long-wait delivery | ⚠️ Undocumented whether callbacks expire | ✅ Works after the topic has ended |
 
 > ⚠️ **A caution about "just try generative orchestration."** The defect was observed on
 > classic orchestration, which parks the conversation in the active topic by design, so
