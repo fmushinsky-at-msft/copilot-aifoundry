@@ -1714,6 +1714,47 @@ Required roles (Microsoft's own list):
 Reach this point only after the stop condition above. The case is strong because every
 tenant-side explanation has been eliminated with evidence rather than assumption.
 
+**Where to file (GCC).** Use the government admin center, not the commercial one:
+
+| Cloud | Support portal |
+|---|---|
+| **GCC** | `gcc.admin.powerplatform.microsoft.us` → **Support** → **Support requests** |
+| Commercial | `admin.powerplatform.microsoft.com/support/requests` |
+
+⚠️ **You need an active support plan to create a request.** Self-help content is free, but
+submitting a case requires Subscription, Professional Direct, or Unified support. If you do not
+know your access ID, ask your service admin or Customer Success Account Manager (CSAM) — a
+government tenant of this size usually has one.
+
+**Steps:**
+
+1. Sign in to the Power Platform admin center for your cloud.
+2. Navigation pane → **Support** → **Support requests**.
+3. Select **Get support**. An AI **Support agent** usually opens; if it is unavailable or
+   unresponsive, select **Switch to web form** for the classic experience.
+4. **Choose the product carefully — this determines routing.**
+
+   | Product | When to pick it |
+   |---|---|
+   | **Power Automate** | The failure is in the flow's connector action. Best fit for this issue |
+   | **Microsoft Copilot Studio** | Pick this if Support says the agent identity is out of Power Automate's scope |
+   | **Microsoft Dataverse** | Only if Support asks for a *support environment* — Power Automate cannot create one |
+
+   ⚠️ Do **not** select *Dynamics 365 Customer Service*. Microsoft states this misroutes and
+   delays requests.
+
+5. Paste the case summary below as the description, and set the issue date to the failing run's
+   timestamp.
+6. Work through the generated solutions. They will not resolve this — proceed to
+   **Create a support request**.
+7. Choose **Technical** (not Advisory). Microsoft closes technical issues filed as advisory.
+8. Set severity honestly. **Severity A commits you to 24/7 engagement**; if you cannot sustain
+   that, file lower to avoid an automatic downgrade.
+9. ⚠️ **Grant advanced diagnostic consent.** Microsoft cannot inspect your tenant or
+   environment without it, and withholding it means a representative must contact you before
+   any real investigation begins.
+10. Leave **Live chat** checked if offered — it gets a representative into the case immediately.
+
 **Collect from the failing run's raw outputs:**
 
 | Item | Where |
