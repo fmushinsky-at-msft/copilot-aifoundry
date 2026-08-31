@@ -1569,12 +1569,120 @@ names the exact service principal being denied:
 
 **Step B — Inspect what is already consented, before changing anything:**
 
-1. **Entra ID** → **Enterprise applications** → **All applications**.
-2. Clear the filters and search for the application named in Step A.
-3. Open it → **Security** → **Permissions**.
-4. Record what is currently granted — screenshot it. This is your rollback reference.
+⚠️ **Do not search by the name "Microsoft Teams."** That returns the Teams *product* app, not
+the connector infrastructure that makes this Graph call. **Search by Application ID instead** —
+names vary between clouds and change over time.
 
-**Step C — Grant consent only if it is genuinely missing.**
+The `x-ms-apihub-*` headers in your `403` identify the caller as Power Platform's **API hub**
+(connector) infrastructure, not the Teams app. These are the documented first-party candidates:
+
+| Application ID | Application name | Why it is a candidate |
+|---|---|---|
+| `fe053c5f-3692-4f14-aef2-ee34fc081cae` | **Azure API Connections** | The service principal behind connector single-sign-on — matches the `x-ms-apihub-*` headers |
+| `7df0a125-d3be-4c96-aa54-591f83ff541c` | Microsoft Flow Service | The flow runtime |
+| `57fcbcfa-7cee-4eb1-8b25-12d2030b4ee0` | Microsoft Flow | The Power Automate service |
+| `cc15fd57-2c6c-4117-a88c-83b1d56b4bbe` | Microsoft Teams Services | The Teams service itself |
+
+*(Source: Microsoft's
+[first-party service and portal apps list](https://learn.microsoft.com/power-platform/admin/apps-to-allow).)*
+
+**To search by ID:**
+
+1. **Entra ID** → **Enterprise applications** → **All applications**.
+2. Clear **every** filter — first-party apps are hidden by the default *Enterprise Applications*
+   filter. Set **Application type** to **All applications**.
+3. Paste the **Application ID** into the search box, not the name.
+4. Open the result → **Security** → **Permissions**.
+
+**Enumerate deterministically instead (recommended).** The portal hides first-party apps
+inconsistently; PowerShell does not:
+
+```powershell
+Connect-MgGraph -Scopes "Application.Read.All","DelegatedPermissionGrant.ReadWrite.All"
+
+# Confirm which of the candidate service principals exist in your tenant
+"fe053c5f-3692-4f14-aef2-ee34fc081cae",
+"7df0a125-d3be-4c96-aa54-591f83ff541c",
+"57fcbcfa-7cee-4eb1-8b25-12d2030b4ee0",
+"cc15fd57-2c6c-4117-a88c-83b1d56b4bbe" | ForEach-Object {
+    Get-MgServicePrincipal -Filter "appId eq '$_'" -ErrorAction SilentlyContinue |
+        Select-Object DisplayName, AppId, Id
+}
+```
+
+Then list what each has actually been granted:
+
+```powershell
+# Replace <sp-object-id> with the Id from the previous command
+Get-MgServicePrincipalOauth2PermissionGrant -ServicePrincipalId "<sp-object-id>" |
+    Select-Object ConsentType, Scope | Format-List
+```
+
+Look for `TeamsAppInstallation.ReadForUser` in the `Scope` output.
+
+> ⚠️ **First-party Microsoft apps often expose no consentable permissions surface at all.**
+> Microsoft pre-authorises these service principals internally, so the **Permissions** blade may
+> be empty and **Grant admin consent** may be absent or greyed out — **not** because consent is
+> missing, but because it is not tenant-managed for that app.
+>
+> **If that is what you find, the "grant consent" path does not apply and this is a Microsoft
+> Support case.** Do not attempt to force consent onto a first-party service principal.
+
+> 💡 **What this means for the diagnosis.** A missing-scope hypothesis is only *actionable* if
+> the scope is something your tenant controls. If the connector's permissions are
+> Microsoft-managed, the refusal is a platform-side issue and Support is the correct and only
+> route — with your request IDs, it is a well-evidenced case.
+
+> ⚠️ **If the service principal does not exist in your tenant at all, that is not proof of the
+> fault.** *(Confirmed in a real GCC build — searching `fe053c5f-…` returned nothing.)*
+> First-party service principals are provisioned **on demand**; many never materialise as
+> visible Enterprise Application objects, and government clouds use different app registrations
+> from commercial. Absence is the normal state for most tenants.
+>
+> ⚠️ **Do not create a missing first-party service principal to "fix" this.** Microsoft
+> documents `New-MgServicePrincipal` for one specific single-sign-on scenario, not as a remedy
+> for connector errors. Creating one speculatively adds an unmanaged identity to your tenant
+> and grants the connector no scope it did not already have.
+
+> 📋 **What a real GCC tenant returned** *(all four candidates checked by a tenant admin)*:
+>
+> | Application ID | Name | Result |
+> |---|---|---|
+> | `fe053c5f-3692-4f14-aef2-ee34fc081cae` | Azure API Connections | **Not present** |
+> | `57fcbcfa-7cee-4eb1-8b25-12d2030b4ee0` | Microsoft Flow | **Not present** |
+> | `7df0a125-d3be-4c96-aa54-591f83ff541c` | Microsoft Flow Service | Present, **no permissions assigned** |
+> | `cc15fd57-2c6c-4117-a88c-83b1d56b4bbe` | Microsoft Teams Services | Present, **no permissions assigned** |
+>
+> ⚠️ **An empty Permissions blade on a first-party app is the normal state, not a defect.**
+> Microsoft Teams Services works tenant-wide with no permissions listed — which demonstrates
+> that these grants are managed internally by Microsoft and are simply not visible or
+> assignable at tenant level.
+>
+> **This is the decisive finding.** It does not confirm *which* permission is missing; it
+> establishes that **no tenant-side consent action exists to take**. A missing-scope hypothesis
+> is only actionable when the scope is tenant-controlled. Here it is not, so the question moves
+> to Microsoft.
+
+> 🛑 **Stop condition — you have exhausted the tenant-side avenues.** If you have reached this
+> point with:
+>
+> - a **live** `403` (`cached-response: false`),
+> - the `403` surviving `installedError` = *Succeed with status code*,
+> - **no** failed service-principal sign-in in Entra, and
+> - **no** matching service principal to inspect,
+>
+> …then there is nothing left to inspect, correct, or consent to. That combination is the
+> signature of a **platform-side refusal**, not a tenant misconfiguration. **Open a Microsoft
+> Support case** — see [Escalating to Microsoft Support](#escalating-to-microsoft-support) —
+> and put the feature behind the email fallback in the meantime.
+
+**Step C — Grant consent only if it is genuinely missing *and* tenant-manageable.**
+
+> 🛑 **In the GCC build documented above, Step C did not apply.** All four candidate service
+> principals were either absent or had no assignable permissions, so there was no
+> **Grant admin consent** action available. If your tenant matches that pattern, skip to
+> [Escalating to Microsoft Support](#escalating-to-microsoft-support). The steps below are kept
+> for tenants where the connector app *does* expose a consentable permissions surface.
 
 Required roles (Microsoft's own list):
 
@@ -1598,6 +1706,63 @@ Required roles (Microsoft's own list):
 > installed** to **Succeed with status code** and re-run. If the action returns `100` instead
 > of `403`, the problem is installation-related and no consent change is needed. **If it still
 > returns `403`, that test is exhausted** — proceed with Step A below.
+
+---
+
+##### Escalating to Microsoft Support
+
+Reach this point only after the stop condition above. The case is strong because every
+tenant-side explanation has been eliminated with evidence rather than assumption.
+
+**Collect from the failing run's raw outputs:**
+
+| Item | Where |
+|---|---|
+| `x-ms-service-request-id` | Response headers |
+| `RequestId` quoted inside the error body | `body.error` |
+| `x-ms-correlation-id` | Response headers |
+| `Date` (UTC) | Response headers |
+| `x-ms-tenant-id` and `x-ms-environment-id` | Response headers |
+| `x-ms-apihub-cached-response` | Must be `false` — proves a live refusal |
+| Full raw **inputs** | Shows `body/bot`, `body/recipient`, `body/installedError` |
+
+**Suggested case summary:**
+
+> Proactive Teams delivery from a Power Automate agent flow fails with `403 Forbidden`. The
+> Microsoft Teams connector cannot complete its Microsoft Graph call to
+> `TeamsAppInstallation.ReadForUser`, returning: *"Did not receive InstalledApplication and
+> received status code Forbidden from graph while getting installed app for user."*
+>
+> Verified on our side: the agent is installed in the recipient's personal Teams scope; the app
+> is admin-approved and shows **Available to: Everyone**, **Scope: Personal**; the recipient
+> address resolves; the flow's **Agent** field references the correct agent; the Teams
+> connection was recreated and shows **Connected**; the response is **not cached**
+> (`cached-response: false`); the `403` persists with **If the agent is not installed** set to
+> *Succeed with status code*; there are **no failed service-principal sign-ins** in Entra; and
+> the connector service principal is **not present** in our tenant to inspect.
+>
+> Service principals checked in Enterprise Applications: `fe053c5f-3692-4f14-aef2-ee34fc081cae`
+> and `57fcbcfa-7cee-4eb1-8b25-12d2030b4ee0` are **not present**;
+> `7df0a125-d3be-4c96-aa54-591f83ff541c` and `cc15fd57-2c6c-4117-a88c-83b1d56b4bbe` are present
+> with **no application or delegated permissions assigned**. There is therefore no tenant-side
+> consent action available to us.
+
+⚠️ **Ask Support two specific questions**, otherwise the case may be routed back as a
+configuration issue:
+
+1. Which service principal performs the `TeamsAppInstallation.ReadForUser` call for the Teams
+   connector **in GCC**, and is it tenant-visible?
+2. Is that permission tenant-consentable, or Microsoft-managed?
+
+**While the case is open — keep the feature usable:**
+
+Your agent already has a working **Email HR** path via `send_hr_email`. Until proactive
+delivery works, point the escalation choice at that path rather than leaving employees with a
+card that produces no reply. The relay flow can stay built and unpublished.
+
+> 💡 **This is a reversible pause, not a rebuild.** Everything except the delivery action is
+> already verified working — the card posts, HR answers, and the flow runs to completion. Only
+> the final hand-off is blocked.
 
 ---
 
