@@ -1169,64 +1169,40 @@ caller must be permitted to ask.
 > | Agent not installed for the recipient | The agent appears under **Chat** in the recipient's Teams |
 > | Agent not admin-approved | Copilot Studio shows **✓ Available in App store**; Teams admin center shows **Available to: Everyone**, **Scope: Personal**, with *"Send me messages and notifications"* consented |
 > | `Recipient` not resolving | The run's **Inputs** show a real, resolving email address |
+> | Wrong app in the **Agent** field | The delivery action's **Agent** field names the correct agent |
 > | GCC platform limitation | Microsoft's [national cloud differences](https://learn.microsoft.com/graph/teamwork-national-cloud-differences) table restricts these installed-app APIs for **GCC High and DoD only** — plain GCC is not listed |
 >
-> If your own build fails at this step, verify those four first — they are the common causes.
-> The two checks below are what remains when they all pass.
+> If your own build fails at this step, verify those five first — they are the common causes.
+> The check below is what remains when they all pass.
 
-⚠️ **When the agent is demonstrably installed and approved, the denial is on the *caller*, not
-the target.** Graph refused to answer the question at all. Two things remain:
+⚠️ **When the agent is installed, approved, and correctly referenced, the denial is on the
+*caller*, not the target.** Graph refused to answer the question at all.
+
+> ⚠️ **The agent working normally in Teams does *not* clear this check.** Ordinary chat runs
+> over the Copilot Studio Teams channel and involves no Graph call and no Power Automate
+> connection. Proactive delivery runs as the **identity stored in the Microsoft Teams
+> connection**, which is a different identity on a different code path. A healthy agent and a
+> broken connection coexist comfortably — and that combination is exactly what this `403`
+> looks like.
 
 | # | Check | Why it produces this error |
 |---|---|---|
-| 1 | **Is the `Agent` field pointing at the right agent?** | A blank or stale **Agent** makes the connector ask about the *wrong app* — inside your flow, seconds to verify |
-| 2 | **Is the Teams connection healthy, and who owns it?** | The Graph call runs as the identity stored in the connection, **not** as you. That identity needs [`TeamsAppInstallation.ReadForUser`](https://learn.microsoft.com/graph/api/userteamwork-list-installedapps) |
+| 1 | **Is the Teams connection healthy, and who owns it?** | The Graph call runs as the identity stored in the connection, **not** as you and **not** as the agent. That identity needs [`TeamsAppInstallation.ReadForUser`](https://learn.microsoft.com/graph/api/userteamwork-list-installedapps) |
 
 > ⚠️ **A DLP policy is the weaker candidate here.** A DLP violation **suspends the flow** —
 > the trigger stops firing and actions never execute. This flow *ran*, reached the delivery
-> action, and received a live `403` from Graph. Check it to rule it out (Step 2c below), but
+> action, and received a live `403` from Graph. Check it to rule it out (Step 1c below), but
 > do not start there.
 
 ---
 
-##### Check 1 — Is the `Agent` field pointing at the right agent?
-
-Easy to overlook, because the field sits below the ones you set deliberately, and a stale or
-blank value produces a Graph lookup for the **wrong app** — which fails even though *your*
-agent is installed correctly.
-
-1. In Power Automate, open **Anonymous HR Relay** → **Edit**.
-2. Select the **Post message in a chat or channel** action.
-3. Find the **Agent** field (below **Post in**).
-
-| What you see | Meaning |
-|---|---|
-| Your agent, e.g. `myHealthBenefit` | ✅ Correct — move to Check 2 |
-| **Blank / empty** | ❌ The connector has no app to look up |
-| A different or old agent name | ❌ Looking up an app the recipient never installed |
-| A raw GUID rather than a name | ⚠️ Compare it against the **App ID** on the agent's page in the Teams admin center |
-
-4. If it is wrong, open the dropdown, re-select your agent, and **Save**.
-
-> ⚠️ **Re-select the agent even if the name looks right.** If the agent was ever republished,
-> the channel reconnected, or the app resubmitted for approval, the stored reference can point
-> at a superseded registration while still *displaying* the correct name. Re-selecting rewrites
-> it.
-
-> 💡 **Why this fits a `403`.** The connector asks Graph *"is app X installed for user Y?"*
-> Both halves must be right. You have proven **Y** (the recipient) and that your agent is
-> installed — but nothing so far has verified **X**, the app the connector is actually asking
-> about.
-
----
-
-##### Check 2 — Is the Teams connection healthy?
+##### Check 1 — Is the Teams connection healthy?
 
 The connector queries Graph **using the identity stored in the Teams connection**. If that
 connection's token is stale, or a policy blocks the connector, the Graph call returns
 `Forbidden` even when the agent is installed and approved.
 
-**Step 2a — Look for a broken connection, and note who owns it**
+**Step 1a — Look for a broken connection, and note who owns it**
 
 1. Open **Power Automate** (`gov.flow.microsoft.us`).
 2. Confirm the environment picker (top right) shows the **same environment** as your agent.
@@ -1237,10 +1213,10 @@ connection's token is stale, or a policy blocks the connector, the Graph call re
 
 | Status | Meaning | Action |
 |---|---|---|
-| **Connected** | Token is valid | Go to Step 2c |
-| **Fix connection** link, or a warning icon | ❌ Token is stale or invalid | Step 2b |
+| **Connected** | Token is valid | Go to Step 1c |
+| **Fix connection** link, or a warning icon | ❌ Token is stale or invalid | Step 1b |
 
-**Step 2b — Repair it**
+**Step 1b — Repair it**
 
 1. Select the **Fix connection** link next to the status.
 2. Sign in when prompted, using the account that owns the flow.
@@ -1255,7 +1231,7 @@ connection's token is stale, or a policy blocks the connector, the Graph call re
 > that person to re-authenticate, or you create your own connection and update the flow to use
 > it.
 
-**Step 2c — Check for a DLP policy blocking the connector**
+**Step 1c — Check for a DLP policy blocking the connector**
 
 ⚠️ **This is a genuine cause of `403` and is easy to miss**, because nothing in your flow
 changed — an administrator changed a policy. Microsoft lists a DLP block as a leading cause of
@@ -1298,7 +1274,7 @@ in a blocked or separate data group.
 > trigger stops firing and actions do not execute. Your flow *ran*, reached the delivery
 > action, and received a `403` **from Graph** with a descriptive message. That is a live call
 > being refused, not a policy block. Check it to rule it out, but if the flow shows **On** and
-> Flow Checker is clean, look at the connection identity in Step 2b instead.
+> Flow Checker is clean, look at the connection identity in Step 1b instead.
 
 > 💡 **A strong signal it *is* DLP:** several unrelated flows break at the same time without
 > anyone editing them, and they show as **Suspended**.
@@ -1307,7 +1283,7 @@ in a blocked or separate data group.
 > Ask your admin which policy applies to your environment and whether the Microsoft Teams
 > connector is permitted.
 
-**Step 2d — Other reasons a connection breaks**
+**Step 1d — Other reasons a connection breaks**
 
 Microsoft documents these causes. Scan them if the status looked healthy but delivery still
 fails:
@@ -1320,12 +1296,12 @@ fails:
 | Token expired through inactivity | The flow had not run for roughly 90 days |
 | Terms of Use policy added | Status reads *"Failed to refresh access token for service"* |
 
-✅ **Checkpoint for Check 2:** the Microsoft Teams connection shows **Connected**, the flow
+✅ **Checkpoint for Check 1:** the Microsoft Teams connection shows **Connected**, the flow
 shows **On** (not Suspended) in **My flows**, and **Flow checker** reports no DLP violation.
 
 ---
 
-##### Check 3 — Was the Teams channel disconnected and reconnected?
+##### Check 2 — Was the Teams channel disconnected and reconnected?
 
 If anyone toggled the Teams channel off and on — a common fix for stale-version problems —
 **every user must reinstall the agent** before proactive delivery works for them again.
@@ -1340,9 +1316,11 @@ If anyone toggled the Teams channel off and on — a common fix for stale-versio
 See [requirement 4](#4-reconnecting-the-agent-to-teams-silently-breaks-delivery) for why this
 happens.
 
-💡 **Fastest overall isolation.** Re-select the **Agent** field (Check 1) and save — it costs
-seconds and is inside your own flow. If the `403` persists, the fault is the connection
-identity, which is administrator territory.
+💡 **Where to focus.** With installation, approval, recipient, and the **Agent** field all
+verified, the connection identity is the remaining suspect. Start with **Step 1a** — note the
+connection's **owner**, not just its status. An owner who is a service account, a departed
+colleague, or an account subject to Conditional Access is the likeliest explanation for a Graph
+call being refused while the agent itself works normally.
 
 #### If the status is `200` but you still see nothing
 
@@ -1746,7 +1724,7 @@ customEvents
 | Symptom | Cause | Fix |
 |---|---|---|
 | Delivery fails with **`403`** and *"Did not receive InstalledApplication… Forbidden from graph"* | The connector's Graph lookup for the recipient's installed apps was denied — **not** the same as status `100` | Agent not installed in the recipient's personal Teams scope, or (in GCC) **not yet approved by a Teams admin**. Full checklist: [403 Forbidden](#-403-forbidden--did-not-receive-installedapplication) |
-| Several unrelated flows break at once, with no edits by anyone | **A Data Loss Prevention policy changed.** Microsoft: DLP changes take effect immediately and block flows without warning | Check **My flows** for a **Suspended** status, and run **Flow checker** inside the flow. Confirm with your Power Platform admin — see [Check 2](#check-2--is-the-teams-connection-healthy) |
+| Several unrelated flows break at once, with no edits by anyone | **A Data Loss Prevention policy changed.** Microsoft: DLP changes take effect immediately and block flows without warning | Check **My flows** for a **Suspended** status, and run **Flow checker** inside the flow. Confirm with your Power Platform admin — see [Check 1](#check-1--is-the-teams-connection-healthy) |
 | Rep submits the card, flow shows **Succeeded**, employee gets nothing | Could be any of four causes — a green run does not mean delivered | **Read the status code from the run** — the full decision table is in [The answer never arrived](#-the-answer-never-arrived--diagnose-it-here) |
 | Employee never receives the answer; delivery returned `100` | **The employee does not have the agent installed** — uninstalled or blocked it while waiting | Expected failure mode. Confirm you set **If the agent is not installed** to *Succeed with status code* and that you log it ([Step D.5](#step-d5--deliver-the-answer-proactively)) |
 | Employee never receives the answer; delivery returned `300` | **If the chat with the agent is active** is set to *Don't send…* — the answer is withheld because the employee is actively chatting with the agent | Set it to **Send** ([Step D.5](#step-d5--deliver-the-answer-proactively)). This hits the most engaged users, who keep the chat open while waiting |
