@@ -940,6 +940,17 @@ via the [telemetry event](#telemetry--near-mandatory-for-this-build).
 
 ### Handle the timeout branch
 
+> 💡 **Building incrementally? Skip this section for now.** The success path works on its own —
+> post a card, have a representative answer it, and the delivery action runs. The timeout
+> branch only matters when **nobody** answers. Get the happy path working end to end first,
+> then come back and add this **before rollout**.
+>
+> ⚠️ **But do not skip it permanently.** Without it, an unanswered question leaves the employee
+> with **no message at all** — see the warning after the flow diagram below.
+>
+> 💡 **While testing, shorten the timeout.** `PT8H` means a failed test ties up a run for eight
+> hours. Set the card's **Timeout** to `PT15M` during testing and raise it before rollout.
+
 Because a timed-out card action **fails**, the delivery step above is skipped when nobody
 answers. You need a second delivery action that runs *only* on that path.
 
@@ -991,6 +1002,22 @@ Post adaptive card AND WAIT
 ✅ **Verify the shape on the canvas.** The card action should have **two arrows leaving it**.
 If you see a single vertical chain instead, the second delivery action was added
 sequentially — delete it and re-add it as a parallel branch.
+
+> ⚠️ **What a *missing* timeout branch looks like.** If the canvas shows a single straight
+> chain —
+>
+> ```
+> Post adaptive card and wait for a response
+>              |
+>              v
+> Post message in a chat or channel
+> ```
+>
+> — with only **one** delivery action and no second branch, the timeout path was never built.
+> This is easy to miss because the flow works perfectly whenever HR answers in time. It fails
+> only when nobody answers: the card action fails with `OperationTimedOut`, the delivery action
+> is skipped by default, and **the employee is never told anything at all.** Add the parallel
+> branch before rollout.
 
 ⚠️ **What goes wrong if it is sequential.** The second action inherits the *first delivery
 action* as its predecessor rather than the card. When someone answers, both fire and the
@@ -1056,6 +1083,13 @@ last node in the branch.
 ---
 
 ## Step D.7 — Publish and test end to end
+
+> 💡 **Test the success path first.** Everything below works with **only the success-path
+> delivery action** built. If you have not yet added the timeout branch
+> ([Handle the timeout branch](#handle-the-timeout-branch)), that is fine for now — a
+> representative answering the card exercises the same delivery action, the same connection,
+> and the same Graph lookup. Add the timeout branch before rollout, then run
+> [And the timeout case](#and-the-timeout-case).
 
 1. **Save**, then **Publish**.
 2. In Teams, ask the agent an unanswerable question and choose **Connect to a representative**.
@@ -1202,19 +1236,51 @@ The connector queries Graph **using the identity stored in the Teams connection*
 connection's token is stale, or a policy blocks the connector, the Graph call returns
 `Forbidden` even when the agent is installed and approved.
 
-**Step 1a — Look for a broken connection, and note who owns it**
+**Step 1a — Look at the connection, and note who owns it**
 
-1. Open **Power Automate** (`gov.flow.microsoft.us`).
-2. Confirm the environment picker (top right) shows the **same environment** as your agent.
-3. In the left navigation, select **More** → **Connections**.
-   *(On some tenants this appears directly as **Connections**, or under **Data** → **Connections**.)*
-4. Find **Microsoft Teams** in the list.
-5. Look at the **Status** column.
+**Fastest route — from inside the flow itself.** This shows the connection actually bound to
+the failing action, so there is no risk of inspecting the wrong one:
+
+1. Open **Power Automate** (`gov.flow.microsoft.us`) → **My flows** → **Anonymous HR Relay**.
+2. Select **Edit**.
+3. Select the **Post message in a chat or channel** action.
+4. At the bottom of the action's settings, look for the connection line — it names the
+   connection and the account it runs as, with a **Change connection** link.
+
+⚠️ **The account shown here is the identity making the Graph call.** If it is not you, that is
+the account being refused — not your own.
+
+**Alternative route — the Connections list.** *(This corrects an earlier path in this guide:
+**More → Connections** does not exist on every tenant.)*
+
+Microsoft's documented location is **Data → Connections**, but the left navigation is
+**customisable**, so the entry may be pinned, unpinned, or absent:
+
+| Where to look | Notes |
+|---|---|
+| **Data** → **Connections** | Microsoft's documented path |
+| **More** (bottom of the left nav) → **Connections** | Where it sits when unpinned. Selecting **More** lists the unpinned pages |
+| Direct URL | Append `/connections` to your Power Automate host, e.g. `gov.flow.microsoft.us/connections` — bypasses the navigation entirely |
+| **Power Apps** (`make.gov.powerapps.us`) → **Data** → **Connections** | Connections are shared between Power Apps and Power Automate — the same list appears in both |
+
+> 💡 **The left navigation is customisable.** Microsoft: use **More** to pin and unpin items.
+> If **Connections** is not visible, it is unpinned rather than unavailable — select **More**,
+> then optionally pin it.
+
+Once you find it:
+
+1. Confirm the environment picker (top right) shows the **same environment** as your agent.
+2. Find **Microsoft Teams** in the list.
+3. Check the **Status** column **and the owner/created-by column**.
 
 | Status | Meaning | Action |
 |---|---|---|
 | **Connected** | Token is valid | Go to Step 1c |
 | **Fix connection** link, or a warning icon | ❌ Token is stale or invalid | Step 1b |
+
+> 💡 **See exactly which flows use a connection.** Select the connection → **…** → **Details**,
+> then **Flows using this connection**. Useful for confirming you are looking at the one your
+> relay actually uses.
 
 **Step 1b — Repair it**
 
@@ -1298,6 +1364,66 @@ fails:
 
 ✅ **Checkpoint for Check 1:** the Microsoft Teams connection shows **Connected**, the flow
 shows **On** (not Suspended) in **My flows**, and **Flow checker** reports no DLP violation.
+
+> 💡 **"This connection isn't being used by any apps" is not a problem.** That panel lists
+> **Power Apps**, not flows. To see flows, use **… → Details → Flows using this connection**.
+
+---
+
+##### If the connection is healthy and owned by you
+
+At this point installation, approval, recipient, the **Agent** field, and the connection have
+all been verified. Two things in the raw `403` response are worth reading before escalating —
+both are easy to scroll past:
+
+| Header | Value seen | What it suggests |
+|---|---|---|
+| `x-ms-apihub-cached-response` | `true` | ⚠️ **The response was served from cache.** The `403` may predate a fix you have already applied |
+| `x-ms-apihub-obo` | `false` | The call is not made *on behalf of* the signed-in user — it uses the connection's own token |
+
+⚠️ **A cached `403` is the trap here.** If the flow was tested **before** the agent was
+installed, approved, or fully propagated, that failure can be returned again on later runs even
+though the underlying cause is fixed. Everything you check afterwards looks correct, and the
+error still appears.
+
+**Check the timeline before assuming the error is current:**
+
+1. Note the `Date` header on the failing run.
+2. Compare it with when the agent was **published**, **approved**, and **installed**.
+3. If the `403` is from *before* or *within minutes of* those events, it may be stale or a
+   propagation race rather than a live permission problem.
+
+**Two fixes, cheapest first:**
+
+1. **Re-run the flow now.** Escalate a fresh question and answer the card. If the earlier
+   failure was cached or a propagation race, this alone can resolve it. Costs one test.
+2. **Create a new connection.** This is the one case where *recreate* beats *repair*: it issues
+   a **new token carrying current permissions** and a **new connection ID**, which bypasses any
+   cached response keyed to the old one.
+
+   **From Copilot Studio** (where the flow is usually open):
+
+   1. Open the flow → select the **Post message in a chat or channel** action.
+   2. Select the connection line → **Change connection**.
+   3. In the panel, select **Add new**.
+   4. Sign in when prompted.
+   5. Confirm the new connection is selected (radio button), then **Save** and republish.
+
+   **From Power Automate:** delete the connection, then reopen the flow and re-select it on the
+   delivery action.
+
+> ⚠️ **A token issued before the agent existed cannot carry permissions for it.** If the Teams
+> connection was created *before* the agent was published and approved, its token may predate
+> the app's Graph permissions. The status still reads **Connected**, because the token is valid
+> — it is simply missing scope. Creating a new connection is the only way to refresh it.
+
+> 💡 **Check the connection's `Created` date against the agent's publish date.** Select the
+> connection's **…** → **Connection details**. If the connection is older than the agent, it is
+> a candidate regardless of what the status says.
+
+> ⚠️ **A recent `Modified` timestamp does not mean the token was reissued with new scope.**
+> Refreshing an existing connection renews the *same* grant. Only **Add new** produces a fresh
+> consent and a new connection ID.
 
 ---
 
