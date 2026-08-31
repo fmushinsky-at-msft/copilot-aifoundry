@@ -465,6 +465,17 @@ An agent **cannot** deliver a proactive message if the recipient:
 ✅ **In your scenario this is satisfied by definition** — the employee just used the agent to
 ask the question. The realistic failure is someone who removes the agent while waiting.
 
+⚠️ **GCC: the agent must be admin-approved before anyone can install it.** Microsoft:
+*"Currently, the only way to approve an agent for Teams is to submit the agent to an admin for
+approval."* Commercial tenants allow self-install from a share link; **GCC does not**. Until an
+admin approves the agent, delivery fails with a `403` Graph error rather than a clean status
+code — see
+[403 Forbidden](#-403-forbidden--did-not-receive-installedapplication).
+
+> 💡 **Test the delivery path before briefing HR.** Being able to chat with the agent in the
+> Copilot Studio **test pane** does *not* prove it is installed in Teams for that user, and the
+> test pane is not what proactive delivery targets.
+
 ### 2. The flow must be in the same environment as the agent
 
 Already true if you created the flow from inside Copilot Studio.
@@ -1070,6 +1081,128 @@ last node in the branch.
 resolves to the agent and not to a person — then scroll the conversation and check you can
 distinguish the human reply from the model's answers without reading closely.
 
+### ⚠️ The answer never arrived — diagnose it here
+
+The most common failure in this build: HR submits the card, the flow reports **Succeeded**, and
+nothing reaches the employee. **A green run does not mean the message was delivered.** Two of
+the three status codes mean "not delivered" while still succeeding.
+
+**Read the status code first. It identifies the cause in one step.**
+
+1. Power Automate (`gov.flow.microsoft.us`) → **My flows** → `Anonymous HR Relay`.
+2. Open the **28-day run history** and select the run.
+3. Expand **Post message in a chat or channel**.
+4. View **raw outputs** and read the status code.
+
+> ⚠️ **First establish whether the flow even resumed.** A card that was submitted does not
+> guarantee the flow continued — see
+> [The card was answered but the flow never resumed](#the-card-was-answered-but-the-flow-never-resumed)
+> below. If the run is still listed as **Running**, no status code exists yet and the delivery
+> action is not your problem.
+
+| What you see | Cause | Fix |
+|---|---|---|
+| Run still shows **Running** after the card was submitted | The card action never received the response | [See below](#the-card-was-answered-but-the-flow-never-resumed) |
+| Action is **greyed out / skipped** | The branch never ran — **Configure run after** is wrong, or the actions are sequential rather than parallel | [Handle the timeout branch](#handle-the-timeout-branch) |
+| Action **failed** with **`403 Forbidden`** and *"Did not receive InstalledApplication"* | The Graph lookup for the recipient's installed apps was denied | [See below](#-403-forbidden--did-not-receive-installedapplication) — in GCC, usually **admin approval** |
+| Status **`300`** | **Withheld** — the recipient was in an active chat with the agent | Set **If the chat with the agent is active** to **Send** |
+| Status **`100`** | Agent not installed, uninstalled, or blocked for that recipient | Reinstall the agent; check [requirement 1](#1-the-employee-must-have-the-agent-installed) |
+| Status **`200`** | **It was delivered** — you are looking in the wrong chat | See the `Post as` check below |
+| Action ran but **`Recipient` is blank** in raw inputs | The topic is not passing `UserEmail` | Authentication issue — see [Step D.6](#step-d6--wire-the-flow-into-the-topic) |
+
+⚠️ **If you are testing this yourself, `300` is a likely answer.** You may be sitting in the
+agent chat when the reply comes back — which is exactly the condition that triggers it. The
+default behaviour withholds the message *and reports success*.
+
+#### The card was answered but the flow never resumed
+
+If the run is still **Running** long after HR submitted the card, the delivery action has not
+executed yet and nothing about it is at fault. The card action never received the response.
+
+⚠️ **The most common cause is a mismatch between how the card was posted and how the response
+comes back.** *Post adaptive card and wait for a response* only resumes when the submitting
+user's response is routed back to that specific waiting run.
+
+| Check | What to look for |
+|---|---|
+| **Did the card visibly update?** | The **Update message** text (`Answer sent to the employee.`) should replace the input fields after submit. If the card still shows the text box, the response never reached Power Automate |
+| **Was the card posted with `Post as` = `Flow bot`?** | Required for channel posts. If it was posted as the agent, the card may render but responses may not route back |
+| **Did more than one person submit?** | Only the **first** submission counts; later ones are ignored |
+| **Was the flow edited and saved while the card was pending?** | Saving a new version can orphan an in-flight run. The old card is then attached to a run that no longer resumes |
+| **Did the run exceed the card timeout?** | After `PT8H` the action fails with `OperationTimedOut` and the *timeout* branch runs instead |
+
+💡 **Fastest way to isolate this:** submit the card and watch the run in Power Automate live.
+If the card action stays yellow (Running) after submit, the problem is the **card**, not the
+delivery. If it turns green, the problem is downstream.
+
+#### ⚠️ `403 Forbidden` — "Did not receive InstalledApplication"
+
+*(Confirmed in a real GCC build.)* The delivery action fails outright with:
+
+```json
+{
+    "statusCode": 403,
+    "body": {
+        "id": "",
+        "messageLink": "",
+        "error": "Did not receive InstalledApplication and received status code
+                   Forbidden from graph while getting installed app for user"
+    }
+}
+```
+
+**What it means.** Before delivering, the connector asks Microsoft Graph *"is this agent
+installed for this user?"* That Graph call returned `Forbidden`, so the connector never got an
+`InstalledApplication` back and refused to send.
+
+**This is not the `100` status code.** `100` is the graceful "agent not installed" result. This
+is the *lookup itself* being denied — the connector could not even determine installation
+state. It fails the action rather than returning a status.
+
+Work through these in order:
+
+| # | Check | Why it produces this error |
+|---|---|---|
+| 1 | **Is the agent installed in the recipient's personal Teams scope?** Open Teams as the recipient and confirm the agent appears in the chat list | The Graph lookup targets the *user's* installed apps. Being able to chat with the agent in the Copilot Studio test pane is **not** the same as having it installed in Teams |
+| 2 | **Has the agent been approved by a Teams admin?** | ⚠️ **GCC-specific.** Microsoft: *"Currently, the only way to approve an agent for Teams is to submit the agent to an admin for approval."* Until approved, per-user installation cannot be resolved |
+| 3 | **Is the recipient value resolving to a real user?** Check raw **inputs**, not outputs | A UPN that does not match a mail-enabled identity yields a Graph lookup against nothing |
+| 4 | **Does the Teams connection have permission to query the user?** Re-authenticate the connection | The connector queries Graph using the connection's identity. A stale or under-consented connection returns `Forbidden` |
+| 5 | **Was the Teams channel disconnected and reconnected?** | Users must reinstall the agent afterwards — see [requirement 4](#4-reconnecting-the-agent-to-teams-silently-breaks-delivery) |
+
+💡 **Fastest way to isolate #1 and #3.** Temporarily replace the `Recipient` expression with
+your own email address typed literally, and run the flow. If a literal address works, the
+problem is recipient resolution. If it still returns `403`, the problem is installation or
+admin approval.
+
+⚠️ **In GCC, check #2 early.** Commercial tenants let users install an agent directly from a
+share link; GCC requires admin approval before the agent is installable. This is the most
+commonly missed prerequisite in a government tenant, and it produces exactly this error.
+
+#### If the status is `200` but you still see nothing
+
+The message was delivered somewhere. Check **`Post as` on the delivery action**:
+
+| `Post as` | Where the message actually went |
+|---|---|
+| **Microsoft Copilot Studio agent** ✅ | The employee's chat with your agent — correct |
+| **Flow bot** ❌ | A separate **Flow bot** chat in Teams, not your agent |
+
+This happens when the delivery action is created by copying the card action, which uses
+**Flow bot** for the channel post. Scroll your Teams chat list for a *Flow bot* conversation —
+if the answer is sitting there, that is the cause.
+
+#### If everything looks right and it still fails
+
+- **Was the Teams channel recently disconnected and reconnected?** Microsoft: *"If the agent
+  disconnects and reconnects to Teams, users don't receive proactive messages until they
+  reinstall the agent."* See
+  [requirement 4](#4-reconnecting-the-agent-to-teams-silently-breaks-delivery).
+- **Is the agent published, and installed in your own Teams?** Proactive delivery requires
+  both.
+- **Does the recipient's UPN differ from their primary SMTP address?** The connector resolves a
+  name or email address. If your tenant's UPN and mail attributes differ, temporarily hardcode
+  your own email in **Recipient** to isolate the variable.
+
 ### Test the undelivered path
 
 Proactive delivery fails silently if the employee removed the agent. Prove your handling works:
@@ -1446,6 +1579,8 @@ customEvents
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| Delivery fails with **`403`** and *"Did not receive InstalledApplication… Forbidden from graph"* | The connector's Graph lookup for the recipient's installed apps was denied — **not** the same as status `100` | Agent not installed in the recipient's personal Teams scope, or (in GCC) **not yet approved by a Teams admin**. Full checklist: [403 Forbidden](#-403-forbidden--did-not-receive-installedapplication) |
+| Rep submits the card, flow shows **Succeeded**, employee gets nothing | Could be any of four causes — a green run does not mean delivered | **Read the status code from the run** — the full decision table is in [The answer never arrived](#-the-answer-never-arrived--diagnose-it-here) |
 | Employee never receives the answer; delivery returned `100` | **The employee does not have the agent installed** — uninstalled or blocked it while waiting | Expected failure mode. Confirm you set **If the agent is not installed** to *Succeed with status code* and that you log it ([Step D.5](#step-d5--deliver-the-answer-proactively)) |
 | Employee never receives the answer; delivery returned `300` | **If the chat with the agent is active** is set to *Don't send…* — the answer is withheld because the employee is actively chatting with the agent | Set it to **Send** ([Step D.5](#step-d5--deliver-the-answer-proactively)). This hits the most engaged users, who keep the chat open while waiting |
 | Delivery action fails outright instead of returning a code | **If the agent is not installed** left as *Fail* | Set it to **Succeed with status code** under **Show advanced options** |
