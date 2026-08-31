@@ -1467,11 +1467,22 @@ and being refused on its merits.
 returns `100` instead of `403`, the problem is installation-related and you have a cleaner
 signal. If it still returns `403`, the Graph call itself is being refused.
 
+> ⚠️ **A `403` that survives this change is diagnostically important.** *(Confirmed in a real
+> GCC build.)* The `installedError` setting only governs what happens **after** Graph answers
+> *"not installed."* A `403` means Graph never answered at all — the lookup was refused before
+> installation state could be determined. This is why the two outcomes mean different things:
+>
+> | Result after the change | Meaning |
+> |---|---|
+> | `100` | Graph answered *"not installed"* — an installation or visibility problem |
+> | Still `403` | ❌ **Graph refused the question** — a permission problem on the caller, which no flow-level setting can influence |
+
 **What a live, persistent `403` means.** The connector must call
 [`TeamsAppInstallation.ReadForUser`](https://learn.microsoft.com/graph/api/userteamwork-list-installedapps)
 before it will send. When the agent is installed, admin-approved, correctly referenced, the
-connection is brand new, and the response is **not cached**, the remaining explanation is that
-the **Teams connector's service principal lacks tenant consent for that Graph permission**.
+connection is brand new, the response is **not cached**, and the `403` **survives setting
+`installedError` to succeed**, the remaining explanation is that the **Teams connector's
+service principal lacks tenant consent for that Graph permission**.
 
 ⚠️ **No amount of reconnecting fixes this.** Consent is granted once at the tenant level, not
 per connection.
@@ -1500,6 +1511,93 @@ per connection.
 > 💡 **If admin consent turns out to be present**, this is a supportable defect rather than a
 > configuration error. Open a Microsoft Support case with the same identifiers — the request
 > IDs let Support locate the exact refused call.
+
+---
+
+##### If you are the tenant administrator — verify before granting consent
+
+⚠️ **Do not go straight to "Grant admin consent."** Microsoft warns that granting tenant-wide
+consent *"may revoke permissions that have already been granted tenant-wide for that
+application."* On a shared first-party connector, that can break unrelated flows across the
+whole tenant. Confirm the diagnosis first — it costs about five minutes.
+
+**Step A — Confirm the refusal in the sign-in logs.** This converts an inference into fact and
+names the exact service principal being denied:
+
+1. Sign in to the **Microsoft Entra admin center** (`entra.microsoft.com`) as at least a
+   **Reports Reader**.
+2. Go to **Entra ID** → **Monitoring & health** → **Sign-in logs**.
+3. Open the **Service principal sign-ins** tab. *(Connector calls are **not** on the default
+   interactive tab.)*
+4. Set the time filter to the window around the failing run — use the `Date` header from the
+   raw output, which is in **UTC**.
+5. Add filter **Status = Failure**.
+6. Find the entry matching your run and open it.
+
+| What to record | Why |
+|---|---|
+| **Application** name and ID | ⚠️ The exact service principal to fix — do not assume which app it is |
+| **Sign-in error code** (`AADSTS…`) | Look it up at [the error lookup tool](https://login.microsoftonline.com/error) |
+| **Failure reason** | Distinguishes missing consent from Conditional Access or a disabled app |
+| **Correlation ID** | Ties the entry to your flow run |
+
+| Failure reason indicates | Meaning |
+|---|---|
+| Consent / permission not granted | ✅ The diagnosis holds — continue to Step B |
+| **Conditional Access** blocked the sign-in | ❌ Different fix — a CA policy is catching the service principal |
+| Application **disabled** for sign-in | ❌ Different fix — re-enable it in **Properties** |
+| **No failure entries at all** | ⚠️ **Expected in this scenario** — see below |
+
+> ⚠️ **An empty sign-in log does not disprove the diagnosis.** *(Confirmed in a real GCC
+> build.)* Microsoft draws a hard line between the two:
+>
+> | Concept | Purpose | Failure code |
+> |---|---|---|
+> | **Authentication** — "who are you?" | Verify identity | `401 Unauthorized` |
+> | **Authorization** — "may you do this?" | Verify permissions | **`403 Forbidden`** |
+>
+> **Sign-in logs record authentication, not authorization.** Your `403` means a token was
+> issued successfully — sign-in *succeeded* — and Graph then rejected the call because the
+> token lacked the required scope. A successful sign-in produces no failure entry, and the
+> authorization refusal happens at the Graph resource, which Entra sign-in logs do not cover.
+>
+> The connector also multiplexes calls through **shared first-party service principals**, so
+> there may be no entry that visibly corresponds to your agent at all.
+>
+> **What this changes:** an empty log is *consistent with* a missing-scope problem rather than
+> evidence against it. It removes a confirmation route, not the hypothesis. Skip to Step B.
+
+**Step B — Inspect what is already consented, before changing anything:**
+
+1. **Entra ID** → **Enterprise applications** → **All applications**.
+2. Clear the filters and search for the application named in Step A.
+3. Open it → **Security** → **Permissions**.
+4. Record what is currently granted — screenshot it. This is your rollback reference.
+
+**Step C — Grant consent only if it is genuinely missing.**
+
+Required roles (Microsoft's own list):
+
+| Role | Can consent to |
+|---|---|
+| **Privileged Role Administrator** | Any permission, including **Microsoft Graph application permissions** |
+| Cloud Application Administrator / Application Administrator | Any permission **except** Microsoft Graph app roles |
+
+1. On the app's **Permissions** page, review every permission requested.
+2. Select **Grant admin consent for \<tenant\>**.
+3. Re-run the flow and check the delivery action's status code.
+
+> ⚠️ **Global Administrator alone may not be enough.** For Microsoft Graph *application*
+> permissions, Microsoft specifies **Privileged Role Administrator**. If **Grant admin consent**
+> is greyed out, this is usually why.
+
+> ⚠️ **Consent takes effect immediately and is not subject to review.** There is no staged
+> rollout and no confirmation step after the click.
+
+> 💡 **Cheaper test first.** Before touching tenant consent, set **If the agent is not
+> installed** to **Succeed with status code** and re-run. If the action returns `100` instead
+> of `403`, the problem is installation-related and no consent change is needed. **If it still
+> returns `403`, that test is exhausted** — proceed with Step A below.
 
 ---
 
