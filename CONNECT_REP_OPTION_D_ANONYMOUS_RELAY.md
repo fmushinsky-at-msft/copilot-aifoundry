@@ -1427,6 +1427,82 @@ error still appears.
 
 ---
 
+##### If a brand-new connection still returns `403`
+
+A fresh connection eliminates stale tokens and cached responses. If the `403` persists, read
+the action's **raw inputs and outputs** together.
+
+**First, confirm the failure is live, not replayed:**
+
+| Header | Value | Meaning |
+|---|---|---|
+| `x-ms-apihub-cached-response` | `false` | ✅ **Live refusal** — Graph was called and said no. Not a stale result |
+| `x-ms-apihub-cached-response` | `true` | ⚠️ Replayed from cache — may predate a fix. Re-run before concluding anything |
+| `x-ms-apihub-obo` | `false` | The call uses the connection's own token, not the signed-in user's |
+
+⚠️ **A live `403` on a brand-new connection is conclusive.** It rules out stale tokens, expired
+consent, cached responses, and connection ownership in one result. The call is reaching Graph
+and being refused on its merits.
+
+**The raw inputs name the app being asked about:**
+
+```json
+"parameters": {
+    "poster": "Power Virtual Agents",
+    "location": "powerva",
+    "body/bot": "cr637_agentH88-Vz",
+    "body/recipient": "user@contoso.gov",
+    "body/installedError": "Fail"
+}
+```
+
+| Field | What to check |
+|---|---|
+| `body/bot` | ⚠️ **The Dataverse logical name of the agent** — this is the app Graph is asked about, *not* the display name you picked from the dropdown |
+| `body/recipient` | The target user |
+| `body/installedError` | `Fail` makes the action error out instead of returning status `100` |
+| `poster` | `Power Virtual Agents` is expected — the internal name for agent-identity posting |
+
+💡 **Set `installedError` to `Succeed with status code` before escalating.** If the action then
+returns `100` instead of `403`, the problem is installation-related and you have a cleaner
+signal. If it still returns `403`, the Graph call itself is being refused.
+
+**What a live, persistent `403` means.** The connector must call
+[`TeamsAppInstallation.ReadForUser`](https://learn.microsoft.com/graph/api/userteamwork-list-installedapps)
+before it will send. When the agent is installed, admin-approved, correctly referenced, the
+connection is brand new, and the response is **not cached**, the remaining explanation is that
+the **Teams connector's service principal lacks tenant consent for that Graph permission**.
+
+⚠️ **No amount of reconnecting fixes this.** Consent is granted once at the tenant level, not
+per connection.
+
+**Escalate to a Global Administrator:**
+
+1. **Microsoft Entra admin center** → **Identity** → **Applications** → **Enterprise
+   applications**.
+2. Find the **Microsoft Teams** connector application used by Power Platform.
+3. Open **Permissions** and check for tenant-wide admin consent covering
+   `TeamsAppInstallation.ReadForUser`.
+4. Ask them to
+   [grant tenant-wide admin consent](https://learn.microsoft.com/entra/identity/enterprise-apps/grant-admin-consent)
+   if it is missing.
+
+> 💡 **Why this fits a government tenant.** Many GCC tenants disable user consent and require
+> explicit admin consent for every Graph permission. Ordinary agent chat is unaffected because
+> it never calls Graph — only proactive delivery does, which is exactly the split you see when
+> the agent answers questions normally but delivery fails.
+
+> ⚠️ **Take the evidence with you.** From the failing run's raw outputs, give your admin the
+> `x-ms-service-request-id`, the `RequestId` quoted inside the error body, the `Date` header,
+> and `x-ms-tenant-id`. Microsoft Support can trace the denied Graph call directly from those
+> values.
+
+> 💡 **If admin consent turns out to be present**, this is a supportable defect rather than a
+> configuration error. Open a Microsoft Support case with the same identifiers — the request
+> IDs let Support locate the exact refused call.
+
+---
+
 ##### Check 2 — Was the Teams channel disconnected and reconnected?
 
 If anyone toggled the Teams channel off and on — a common fix for stale-version problems —
