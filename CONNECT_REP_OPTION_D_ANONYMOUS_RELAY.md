@@ -1104,7 +1104,7 @@ the three status codes mean "not delivered" while still succeeding.
 |---|---|---|
 | Run still shows **Running** after the card was submitted | The card action never received the response | [See below](#the-card-was-answered-but-the-flow-never-resumed) |
 | Action is **greyed out / skipped** | The branch never ran — **Configure run after** is wrong, or the actions are sequential rather than parallel | [Handle the timeout branch](#handle-the-timeout-branch) |
-| Action **failed** with **`403 Forbidden`** and *"Did not receive InstalledApplication"* | The Graph lookup for the recipient's installed apps was denied | [See below](#-403-forbidden--did-not-receive-installedapplication) — in GCC, usually **admin approval** |
+| Action **failed** with **`403 Forbidden`** and *"Did not receive InstalledApplication"* | The Graph lookup for the recipient's installed apps was denied | [See below](#-403-forbidden--did-not-receive-installedapplication) — usually **not installed for that user**, or a **DLP policy** |
 | Status **`300`** | **Withheld** — the recipient was in an active chat with the agent | Set **If the chat with the agent is active** to **Send** |
 | Status **`100`** | Agent not installed, uninstalled, or blocked for that recipient | Reinstall the agent; check [requirement 1](#1-the-employee-must-have-the-agent-installed) |
 | Status **`200`** | **It was delivered** — you are looking in the wrong chat | See the `Post as` check below |
@@ -1159,24 +1159,255 @@ installed for this user?"* That Graph call returned `Forbidden`, so the connecto
 is the *lookup itself* being denied — the connector could not even determine installation
 state. It fails the action rather than returning a status.
 
-Work through these in order:
+Work through these in order. **Checks 1–3 are covered click-by-click below**; 4 and 5 are
+rarer and summarised at the end.
 
 | # | Check | Why it produces this error |
 |---|---|---|
-| 1 | **Is the agent installed in the recipient's personal Teams scope?** Open Teams as the recipient and confirm the agent appears in the chat list | The Graph lookup targets the *user's* installed apps. Being able to chat with the agent in the Copilot Studio test pane is **not** the same as having it installed in Teams |
-| 2 | **Has the agent been approved by a Teams admin?** | ⚠️ **GCC-specific.** Microsoft: *"Currently, the only way to approve an agent for Teams is to submit the agent to an admin for approval."* Until approved, per-user installation cannot be resolved |
-| 3 | **Is the recipient value resolving to a real user?** Check raw **inputs**, not outputs | A UPN that does not match a mail-enabled identity yields a Graph lookup against nothing |
-| 4 | **Does the Teams connection have permission to query the user?** Re-authenticate the connection | The connector queries Graph using the connection's identity. A stale or under-consented connection returns `Forbidden` |
+| 1 | **Is the agent installed in the recipient's personal Teams scope?** | The Graph lookup targets the *user's* installed apps. Chatting with the agent in the Copilot Studio test pane is **not** the same as having it installed in Teams |
+| 2 | **Has the agent been approved by a Teams admin, and is it unblocked for that user?** | Until approved, per-user installation cannot be resolved. ⚠️ **Approved is not the same as installed** — both are required |
+| 3 | **Is the recipient value resolving to a real user?** | A `Recipient` that is blank or does not match a real identity gives Graph nothing to look up |
+| 4 | **Is the Teams connection healthy, and is a DLP policy blocking the connector?** | The connector queries Graph using the connection's identity. A stale token — or an admin's Data Loss Prevention policy — returns `Forbidden` |
 | 5 | **Was the Teams channel disconnected and reconnected?** | Users must reinstall the agent afterwards — see [requirement 4](#4-reconnecting-the-agent-to-teams-silently-breaks-delivery) |
 
-💡 **Fastest way to isolate #1 and #3.** Temporarily replace the `Recipient` expression with
-your own email address typed literally, and run the flow. If a literal address works, the
-problem is recipient resolution. If it still returns `403`, the problem is installation or
-admin approval.
+---
 
-⚠️ **In GCC, check #2 early.** Commercial tenants let users install an agent directly from a
-share link; GCC requires admin approval before the agent is installable. This is the most
-commonly missed prerequisite in a government tenant, and it produces exactly this error.
+##### Check 1 — Is the agent actually installed in Teams for that person?
+
+Do this **as the person who should receive the answer** (for a first test, that is you).
+
+1. Open **Microsoft Teams** (desktop or web).
+2. Look at the **left-hand app bar** (the vertical strip of icons).
+3. Select **Chat**.
+4. In the chat list, look for your agent by name — for example `myHealthBenefit`.
+
+| What you see | What it means |
+|---|---|
+| The agent appears in the chat list | ✅ Installed. Move to Check 2 |
+| No agent in the list | ❌ **Not installed** — this alone causes the `403` |
+
+**If it is not there, install it:**
+
+1. Go to **Copilot Studio** (`gcc.powerva.microsoft.us`) and open your agent.
+2. On the top menu bar, select **Channels**.
+3. Select the **Teams and Microsoft 365 Copilot** tile. A configuration panel opens.
+4. Select **See agent in Teams**. Teams opens with an install dialog.
+5. Select **Add**.
+6. Return to Teams → **Chat** and confirm the agent now appears.
+
+> ⚠️ **The agent must have been published at least once** before this works. If **See agent in
+> Teams** is missing or greyed out, publish first: **Publish** on the top bar, then retry.
+
+> 💡 **Test-pane success proves nothing here.** The test pane inside Copilot Studio is a
+> different surface. Proactive delivery targets the **Teams personal chat**, which is why an
+> agent that answers perfectly in the test pane can still fail delivery.
+
+---
+
+##### Check 2 — Has a Teams admin approved the agent?
+
+In a commercial tenant, users can install an agent from a share link. In GCC, Microsoft's
+guidance is that admin approval is the route to making the agent available. If approval was
+never requested, per-user installation cannot resolve — producing a `403`.
+
+**See the current status:**
+
+1. In **Copilot Studio**, open your agent.
+2. Top menu bar → **Channels**.
+3. Select the **Microsoft 365 and Microsoft Teams** tile.
+4. In the panel, select **Availability options**.
+5. Read the **Show in the store** section:
+
+| What you see | Meaning | Next step |
+|---|---|---|
+| Green **✓ Available in App store** under *Show to everyone in my org* | ✅ **Approved and live** | Approval is not your problem — go to Check 3 |
+| **Submit for admin approval** button | Never submitted | Submit it — steps below |
+| A status note such as *pending* | Waiting on your admin | Select **Refresh**; then chase the admin |
+| Green **Added to Teams** under *Show to my teammates and shared users* | Shared with teammates only, **not** org-approved | Remove it first (step 1 below), then submit |
+
+> ⚠️ **Approved ≠ installed.** Admin approval only makes the agent *available* in the app
+> store. Each user must still install it before proactive delivery can reach them, unless your
+> admin pushes it with an
+> [app setup policy](https://learn.microsoft.com/microsoftteams/teams-app-setup-policies).
+> **Approval and installation are separate failures with the same `403` symptom** — confirm
+> Check 1 independently.
+
+**To submit for approval:**
+
+1. In **Availability options**, confirm the agent is **not** currently shown to teammates.
+   If you see **Added to Teams**, open **Show to my teammates and shared users**, clear the
+   **Show in Built By Your Colleagues** checkbox, and select **Share**.
+2. Select **Show to everyone in my org**.
+3. Review the requirements shown, then select **Submit for admin approval**.
+4. A confirmation prompt appears — select **Yes**.
+5. Wait for your admin. Check progress with **Refresh** on the same panel.
+
+> ⚠️ **Do not reduce the agent's access setting after submitting.** Microsoft warns that
+> setting access to less than everyone in the organization leaves users unable to chat with the
+> agent after installing it.
+
+> ⚠️ **Only one submission at a time.** Once submitted, nobody else can resubmit until your
+> admin approves or rejects it.
+
+> 💡 **This step needs your Teams administrator.** You cannot approve your own agent. If HR is
+> waiting on a rollout date, raise this early — it is the only step gated on another team.
+
+**Also confirm the app is not blocked in the Teams admin center:**
+
+Approval and *availability* are separate from whether the app is **allowed** for the target
+user. If you have Teams admin access:
+
+1. Open the **Microsoft Teams admin center** (`admin.teams.microsoft.com`).
+2. Left navigation → **Teams apps** → **Manage apps**.
+3. Search for your agent by name and open it.
+4. On the **About** tab, check **Available to** — `Everyone` means no org-wide block.
+5. Open the **Users and groups** tab and confirm the intended recipient is not excluded.
+6. Open the **Permission policies** page and verify the policy assigned to that user does not
+   block **Built with Power Platform** apps.
+
+> 💡 **`Scope: Personal`** on the About tab is what proactive delivery needs — it confirms the
+> app supports personal (one-to-one) chat.
+
+---
+
+##### Check 3 — Is `Recipient` resolving to a real person?
+
+This isolates a bad address from an installation problem, and takes about two minutes.
+
+**First, see what was actually sent:**
+
+1. Open **Power Automate** (`gov.flow.microsoft.us`).
+2. Confirm the environment picker (top right) shows the **same environment** as your agent.
+3. Left navigation → **My flows**.
+4. Select **Anonymous HR Relay**.
+5. Scroll to **28-day run history** and select the most recent run.
+6. Select the **Post message in a chat or channel** action to expand it.
+7. Look at **Inputs** (not Outputs) and find **Recipient**.
+
+| What `Recipient` shows | Meaning |
+|---|---|
+| A full email address, e.g. `jsmith@panynj.gov` | ✅ Resolving — the problem is installation or approval |
+| **Blank or empty** | ❌ The topic is not passing `UserEmail` — authentication issue, see [Step D.6](#step-d6--wire-the-flow-into-the-topic) |
+| Something that is not an address | ❌ Wrong field mapped in the topic |
+
+**Then prove it with a hardcoded address:**
+
+1. In Power Automate, open **Anonymous HR Relay** and select **Edit**.
+2. Select the **Post message in a chat or channel** action.
+3. In **Recipient**, delete the dynamic content chip and **type your own email address**.
+4. Select **Save**.
+5. Run a full test: escalate a question in Teams, then answer the card.
+
+| Result | Conclusion |
+|---|---|
+| Message arrives | The delivery step works — the fault is **recipient resolution**. Restore the `UserEmail` chip and check the topic mapping in [Step D.6](#step-d6--wire-the-flow-into-the-topic) |
+| Still `403` | Recipient is fine — the fault is **installation or admin approval** (Checks 1 and 2) |
+
+> ⚠️ **Put the dynamic value back afterwards.** A hardcoded address sends every employee's
+> answer to you. This is a diagnostic only.
+
+---
+
+##### Check 4 — Is the Teams connection healthy?
+
+The connector queries Graph **using the identity stored in the Teams connection**. If that
+connection's token is stale, or a policy blocks the connector, the Graph call returns
+`Forbidden` even when the agent is installed and approved.
+
+**Step 4a — Look for a broken connection**
+
+1. Open **Power Automate** (`gov.flow.microsoft.us`).
+2. Confirm the environment picker (top right) shows the **same environment** as your agent.
+3. In the left navigation, select **More** → **Connections**.
+   *(On some tenants this appears directly as **Connections**, or under **Data** → **Connections**.)*
+4. Find **Microsoft Teams** in the list.
+5. Look at the **Status** column.
+
+| Status | Meaning | Action |
+|---|---|---|
+| **Connected** | Token is valid | Go to Step 4c |
+| **Fix connection** link, or a warning icon | ❌ Token is stale or invalid | Step 4b |
+
+**Step 4b — Repair it**
+
+1. Select the **Fix connection** link next to the status.
+2. Sign in when prompted, using the account that owns the flow.
+3. Wait for the status to return to **Connected**.
+4. Re-run your end-to-end test.
+
+> 💡 **Repair before deleting.** *(This corrects earlier advice in this guide.)* Microsoft's
+> documented fix is **Fix connection**, not deletion. Deleting a connection detaches it from
+> every flow using it, and you must then reopen each flow and re-select the connection.
+
+> ⚠️ **If the connection is owned by someone else**, you cannot repair it. Microsoft: you need
+> that person to re-authenticate, or you create your own connection and update the flow to use
+> it.
+
+**Step 4c — Check for a DLP policy blocking the connector**
+
+⚠️ **This is a genuine cause of `403` and is easy to miss**, because nothing in your flow
+changed — an administrator changed a policy. Microsoft lists a DLP block as a leading cause of
+`403 Forbidden` in cloud flows.
+
+Government tenants commonly run stricter Data Loss Prevention policies than commercial ones, so
+this is worth checking in GCC even if the flow previously worked.
+
+1. Open the flow's detail page in Power Automate.
+2. Select **Properties**.
+3. Look for a **DLP violation** message.
+
+| What you see | Meaning |
+|---|---|
+| No DLP message | Policy is not blocking this flow |
+| A DLP violation message | ❌ An admin's policy blocks the Teams connector in this environment |
+
+If you have Power Platform admin access, confirm it directly:
+**Power Platform admin center** (`gcc.admin.powerplatform.microsoft.us`) → **Policies** →
+**Data policies**. Check whether a policy covering your environment places **Microsoft Teams**
+in a blocked or separate data group.
+
+> 💡 **A strong signal it is DLP:** several unrelated flows break at the same time without
+> anyone editing them. Microsoft notes DLP changes take effect immediately and block flows
+> without warning.
+
+> ⚠️ **You cannot fix a DLP policy yourself** unless you are a Power Platform administrator.
+> Ask your admin which policy applies to your environment and whether the Microsoft Teams
+> connector is permitted.
+
+**Step 4d — Other reasons a connection breaks**
+
+Microsoft documents these causes. Scan them if the status looked healthy but delivery still
+fails:
+
+| Cause | Tell-tale sign |
+|---|---|
+| Password changed or expired | Connection broke around the time you changed your password |
+| MFA or Conditional Access policy changed | An admin altered sign-in requirements recently |
+| Admin revoked consent | Multiple connectors broke simultaneously |
+| Token expired through inactivity | The flow had not run for roughly 90 days |
+| Terms of Use policy added | Status reads *"Failed to refresh access token for service"* |
+
+✅ **Checkpoint for Check 4:** the Microsoft Teams connection shows **Connected**, and the
+flow's **Properties** page shows no DLP violation.
+
+---
+
+##### Check 5 — Was the Teams channel disconnected and reconnected?
+
+If anyone toggled the Teams channel off and on — a common fix for stale-version problems —
+**every user must reinstall the agent** before proactive delivery works for them again.
+
+1. In **Copilot Studio**, open your agent → **Channels**.
+2. Select the **Teams and Microsoft 365 Copilot** tile.
+3. If the panel offers **Add channel**, the channel is currently disconnected — reconnect it,
+   then **Publish**.
+4. Have each user reinstall the agent (Check 1's install steps).
+
+See [requirement 4](#4-reconnecting-the-agent-to-teams-silently-breaks-delivery) for why this
+happens.
+
+💡 **Fastest overall isolation.** Check 3's hardcoded-address test splits the problem in half in
+one run: if a literal address still fails, stop looking at the flow and focus on Checks 1 and 2.
 
 #### If the status is `200` but you still see nothing
 
@@ -1580,6 +1811,7 @@ customEvents
 | Symptom | Cause | Fix |
 |---|---|---|
 | Delivery fails with **`403`** and *"Did not receive InstalledApplication… Forbidden from graph"* | The connector's Graph lookup for the recipient's installed apps was denied — **not** the same as status `100` | Agent not installed in the recipient's personal Teams scope, or (in GCC) **not yet approved by a Teams admin**. Full checklist: [403 Forbidden](#-403-forbidden--did-not-receive-installedapplication) |
+| Several unrelated flows break at once, with no edits by anyone | **A Data Loss Prevention policy changed.** Microsoft: DLP changes take effect immediately and block flows without warning | Flow → **Properties** → look for a DLP violation message. Confirm with your Power Platform admin — see [Check 4](#check-4--is-the-teams-connection-healthy) |
 | Rep submits the card, flow shows **Succeeded**, employee gets nothing | Could be any of four causes — a green run does not mean delivered | **Read the status code from the run** — the full decision table is in [The answer never arrived](#-the-answer-never-arrived--diagnose-it-here) |
 | Employee never receives the answer; delivery returned `100` | **The employee does not have the agent installed** — uninstalled or blocked it while waiting | Expected failure mode. Confirm you set **If the agent is not installed** to *Succeed with status code* and that you log it ([Step D.5](#step-d5--deliver-the-answer-proactively)) |
 | Employee never receives the answer; delivery returned `300` | **If the chat with the agent is active** is set to *Don't send…* — the answer is withheld because the employee is actively chatting with the agent | Set it to **Send** ([Step D.5](#step-d5--deliver-the-answer-proactively)). This hits the most engaged users, who keep the chat open while waiting |
