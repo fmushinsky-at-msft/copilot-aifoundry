@@ -1726,6 +1726,29 @@ submitting a case requires Subscription, Professional Direct, or Unified support
 know your access ID, ask your service admin or Customer Success Account Manager (CSAM) — a
 government tenant of this size usually has one.
 
+> 🛑 **"No support plans available for this product."** *(Hit in a real GCC build.)* The Power
+> Platform admin center gates case creation on a support plan **linked to that specific
+> product**. Your organisation may hold a valid plan that simply is not associated with Power
+> Automate or Copilot Studio here.
+>
+> **Use the Microsoft 365 admin center instead** — it is the documented route for government
+> clouds and uses your Microsoft 365 support entitlement rather than a Power Platform product
+> plan:
+>
+> | Cloud | Portal |
+> |---|---|
+> | **GCC** | `portal.office365.us/adminportal` → **Show all** → **Support** → **New Service Request** |
+> | Commercial | `admin.microsoft.com` → **Help & support** |
+>
+> ⚠️ **Requires an admin role with a valid email address on the account.** Microsoft: only
+> accounts marked as an administrator can contact support, and identity may be verified against
+> the email or phone number on the user record. **Service Administrator** is the minimum
+> view-only role that can open cases.
+>
+> 💡 **If you have filed Power Platform cases before**, your tenant has a working support route
+> — the block is product-linkage on this particular request, not entitlement. Check the closed
+> requests already listed on the **Support requests** page to see which channel produced them.
+
 **Steps:**
 
 1. Sign in to the Power Platform admin center for your cloud.
