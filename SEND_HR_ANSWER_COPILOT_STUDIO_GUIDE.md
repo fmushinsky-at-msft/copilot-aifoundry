@@ -223,9 +223,9 @@ Location: **Azure Portal → Function App → Settings → Environment variables
 
 - ☐ Add `HR_REPLY_FROM_ADDRESS` = the shared mailbox from Section 3,
   e.g. `hr-benefits@panynj.gov`. **Required** — without it every call returns `500`.
-- ☐ (Strongly recommended) Add `HR_REPLY_ALLOWED_RECIPIENTS` = `panynj.gov`.
-  Restricts who the endpoint may email. Without it, anyone holding the function key can
-  deliver mail from your HR mailbox to **any** address on the internet.
+- ☐ (Optional) Add `HR_REPLY_ALLOWED_RECIPIENTS` = `panynj.gov`.
+  Restricts who the endpoint may email. Leave it unset and the endpoint will deliver to any
+  valid address; the Function logs a warning on every call to make that visible.
 - ☐ Click **Apply / Save**.
 - ☐ **Restart** the Function App (Overview → Restart) so new settings load.
 
@@ -235,9 +235,21 @@ az functionapp config appsettings set `
   --name "<FUNCTION_APP_NAME>" `
   --resource-group "<RESOURCE_GROUP>" `
   --settings `
-    "HR_REPLY_FROM_ADDRESS=hr-benefits@panynj.gov" `
+    "HR_REPLY_FROM_ADDRESS=hr-benefits@panynj.gov"
+
+# Optional: restrict who may receive answers.
+az functionapp config appsettings set `
+  --name "<FUNCTION_APP_NAME>" `
+  --resource-group "<RESOURCE_GROUP>" `
+  --settings `
     "HR_REPLY_ALLOWED_RECIPIENTS=panynj.gov"
 ```
+
+> **Worth setting even though it is optional.** Without it, anyone holding the function key
+> can send mail from your HR mailbox to any address. Since `user_email` arrives from the
+> flow, a wrong `text_N` mapping (Step 7.3) would also deliver an employee's answer
+> somewhere unintended. The allow-list turns that into a `403` instead of a misdirected
+> email.
 
 > These are **separate** from `HR_ALLOWED_RECIPIENTS` used by `send_hr_email`. That one
 > limits where questions go; these limit where answers go. Do not merge them.
@@ -527,7 +539,7 @@ Power Automate connectors send).
 | Setting | Required | Purpose |
 |---|---|---|
 | `HR_REPLY_FROM_ADDRESS` | ✅ | Shared mailbox the answer is sent from |
-| `HR_REPLY_ALLOWED_RECIPIENTS` | Recommended | Addresses/domains that may receive answers |
+| `HR_REPLY_ALLOWED_RECIPIENTS` | Optional | Addresses/domains that may receive answers; unset = unrestricted |
 | `HR_ALLOWED_RECIPIENTS` | *(existing)* | Used by `send_hr_email`; unrelated to this route |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | *(existing)* | Required for the telemetry in Section 11 |
 

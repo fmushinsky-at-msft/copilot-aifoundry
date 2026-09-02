@@ -1210,8 +1210,8 @@ def send_hr_answer(req: func.HttpRequest) -> func.HttpResponse:
           rather than falling back to a sender that could unmask the responder.
         - HR_REPLY_ALLOWED_RECIPIENTS (optional): comma/semicolon separated
           allow-list of addresses or domains that 'user_email' may target.
-          Strongly recommended, otherwise any caller with the function key can
-          deliver mail to any address.
+          When unset the endpoint may deliver to any valid address, and logs a
+          warning on each call to make that visible.
     """
     logging.info("send_hr_answer trigger invoked.")
 
