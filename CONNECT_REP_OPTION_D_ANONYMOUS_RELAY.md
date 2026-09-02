@@ -2199,6 +2199,95 @@ stretches.
 > agent flows natively support only **Text, Boolean, and Number** — Tables and Records require
 > conversion.
 
+### Building the delivery yourself — custom bot via the Microsoft 365 Agents SDK
+
+A reasonable question once the connector is blocked: *could `function_app.py` post the answer
+itself?* The short answer is **yes, but not as your existing agent** — and that distinction
+decides whether it is worth doing.
+
+#### First, two products that are easy to confuse
+
+| Product | What it is | Right tool here? |
+|---|---|---|
+| **Microsoft Agent Framework** | Orchestration SDK — the successor to Semantic Kernel and AutoGen. Agents, tools, graph-based workflows, model clients | ❌ **No.** It orchestrates reasoning and tool calls. It does not send Teams messages |
+| **Microsoft 365 Agents SDK** | Conversation, channel, and authentication management using the Activity Protocol. Ships a `Proactive` API | ✅ **Yes** — this is the messaging SDK |
+
+⚠️ **Agent Framework is not a Teams messaging library.** It has no channel or Activity
+Protocol surface. Reaching for it here would be a dead end.
+
+#### The blocker: you cannot post *as* `myHealthBenefit`
+
+A Teams proactive message is sent **as a specific bot identity**, authenticated with that bot's
+app credentials. The employee's chat with `myHealthBenefit` belongs to the **Copilot Studio
+agent's** bot identity (App ID `a1d9ba8f-…` in the Teams admin center).
+
+**Copilot Studio owns those credentials and does not expose them.** Your Function cannot
+authenticate as that agent, so it cannot post into that conversation.
+
+| What you want | Achievable from your own code? |
+|---|---|
+| Message appears in the existing `myHealthBenefit` chat | ❌ No — requires the agent's app credentials |
+| Message appears in a **separate** chat from a **new** bot you own | ✅ Yes |
+
+**Consequence:** the employee ends up with two chats — one with the HR benefits agent, one with
+your relay bot — and the answer arrives in the second. Anonymity survives (still a bot, not a
+person), but the *"ask the agent, the agent answers"* experience does not.
+
+#### Why it might nonetheless work where the connector fails
+
+This is the genuinely interesting part. The two paths make **different calls**:
+
+| Path | How it addresses the user | Graph `TeamsAppInstallation.ReadForUser`? |
+|---|---|---|
+| Power Platform Teams connector | Resolves the recipient, then checks installation via Graph | ✅ Yes — **this is the call returning `403`** |
+| Agents SDK custom bot | Uses a stored `conversationReference` captured from an earlier activity | ❌ No such call |
+
+A custom bot posts through the Bot Framework connector API using a conversation reference it
+already holds. **It never performs the Graph lookup that is being refused.** If the `403` is
+specific to that lookup, this path sidesteps it.
+
+⚠️ **That is a hypothesis, not a finding.** The refusal may be a broader tenant policy on
+bot-initiated messaging, in which case a custom bot hits its own wall — Teams returns `403`
+with `subCode: MessageWritesBlocked` when an agent is blocked or uninstalled.
+
+#### What it would actually cost
+
+| Requirement | Detail |
+|---|---|
+| **New Entra app registration** | Your bot's identity, with credentials you manage and rotate |
+| **New Teams app package** | Manifest, icons, and — in GCC — **admin approval**, the same gate as the agent |
+| **Separate install by every employee** | They already installed the agent; now they need a second app |
+| **Capture and store `conversationReference`** | Must arrive from an inbound activity, so the employee has to message the relay bot at least once before it can reach them |
+| **Durable storage** | Conversation references outlive any single run — Table Storage or Cosmos DB |
+| **GCC service URL** | `TeamsProactiveServiceEndpoints.gcc`. Do not hardcode the public endpoint |
+| **Language** | The Agents SDK supports C#, JavaScript/TypeScript, and Python — your Function App is Python v2, so this is compatible |
+
+⚠️ **The `conversationReference` requirement is the sharpest edge.** Microsoft: *"Teams doesn't
+support sending proactive messages using email or User Principal Name."* You need a
+`conversationId` or `aadObjectId`, captured from an activity the user already sent **to your
+bot**. An employee who has never messaged the relay bot cannot be reached by it — so the
+onboarding step is unavoidable.
+
+#### Honest assessment
+
+| | |
+|---|---|
+| **Solves the `403`?** | ⚠️ Plausibly — different call path — but unproven |
+| **Preserves the UX?** | ❌ No — answer arrives from a second bot in a second chat |
+| **Preserves anonymity?** | ✅ Yes |
+| **Effort** | **Days**, plus a second GCC admin-approval cycle |
+| **Ongoing cost** | A bot registration, credential rotation, and stored conversation references to maintain |
+
+> 💡 **Sequence this correctly.** It is a real fallback, but it is the most expensive option on
+> the table and it degrades the experience. Exhaust the cheaper paths first: the Support case,
+> the [fast-answer variant](#-the-hr-answers-in-minutes-variant--plausible-unverified-and-a-different-product),
+> and the existing `send_hr_email` route — all of which preserve the single-agent experience.
+
+> ⚠️ **If you do build it, keep the labelling.** The
+> [transparency requirements](#making-it-clear-which-answers-came-from-a-person) apply
+> unchanged — arguably more so, because a message from an unfamiliar second bot is easier to
+> mistake for an automated notification than a reply from the agent the employee just asked.
+
 ### If you need a shorter, staffed window
 
 Nothing here depends on an 8-hour wait. If HR would rather guarantee a fast reply during
