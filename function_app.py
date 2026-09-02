@@ -6,6 +6,7 @@ import json
 import re
 import time
 import threading
+import html
 import urllib.request
 import urllib.error
 from urllib.parse import quote
@@ -1165,6 +1166,297 @@ def send_hr_email(req: func.HttpRequest) -> func.HttpResponse:
                 "question": _truncate(question),
                 "userEmail": user_email,
                 "userId": user_id,
+                "conversationId": conversation_id,
+                "error": _truncate(str(e), 2000),
+                "agentLabel": agent_label or None,
+            },
+        )
+        return func.HttpResponse(
+            json.dumps({"sent": False, "error": str(e)}),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+
+@app.route(route="send_hr_answer")
+def send_hr_answer(req: func.HttpRequest) -> func.HttpResponse:
+    """Deliver an HR representative's answer back to the employee by email.
+
+    This is the return leg of the anonymous relay: 'send_hr_email' forwards the
+    employee's question to HR, and this endpoint delivers the reply. It exists as
+    an alternative to proactive Teams delivery, which requires Graph permissions
+    that are not available in this tenant.
+
+    Anonymity: the message is sent from a shared HR mailbox, never from the
+    representative who wrote the answer. This endpoint deliberately accepts no
+    responder name, address, or id, so the representative's identity cannot be
+    disclosed even if a caller supplies it. Replies from the employee land back
+    in the shared mailbox rather than in the representative's inbox.
+
+    Request (query string or JSON body):
+        - answer (required): the representative's response text
+        - user_email (required): the employee who asked; the sole recipient
+        - question (optional): the original question, echoed for context
+        - user_full_name (optional): used to greet the employee
+        - conversation_id (optional): for traceability
+        - agent_label (optional): user-friendly display name of the agent that
+          produced the escalation. Used in the subject and on the telemetry event.
+
+    Environment variables:
+        - HR_REPLY_FROM_ADDRESS (required): shared mailbox the reply is sent from,
+          e.g. 'hr-benefits@panynj.gov'. The managed identity's Mail.Send
+          application permission must cover this mailbox (see the Exchange
+          Application Access Policy). Without it the request fails with 500
+          rather than falling back to a sender that could unmask the responder.
+        - HR_REPLY_ALLOWED_RECIPIENTS (optional): comma/semicolon separated
+          allow-list of addresses or domains that 'user_email' may target.
+          Strongly recommended, otherwise any caller with the function key can
+          deliver mail to any address.
+    """
+    logging.info("send_hr_answer trigger invoked.")
+
+    # --- Parse inputs (query params first, then JSON body) ---
+    answer = req.params.get("answer")
+    question = req.params.get("question")
+    user_email = req.params.get("user_email")
+    user_full_name = req.params.get("user_full_name")
+    conversation_id = req.params.get("conversation_id")
+    agent_label = req.params.get("agent_label")
+
+    if not answer:
+        body = None
+        try:
+            body = req.get_json()
+        except ValueError:
+            # Not valid JSON — log the raw payload so the caller's shape is visible.
+            raw = ""
+            try:
+                raw = req.get_body().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            logging.warning("send_hr_answer: JSON parse failed. Set DEBUG_RAW_RESPONSE=true to log the raw payload.")
+            if os.environ.get("DEBUG_RAW_RESPONSE", "").lower() in ("1", "true", "yes"):
+                logging.warning(f"send_hr_answer raw body (truncated): {raw[:1000]}")
+            if raw:
+                try:
+                    body = json.loads(raw)
+                except Exception:
+                    body = None
+
+        # Some callers (certain Power Automate connectors) send the JSON payload
+        # double-encoded as a string. Decode one extra level if needed.
+        if isinstance(body, (str, bytes)):
+            try:
+                body = json.loads(body)
+                logging.info("send_hr_answer: decoded double-encoded JSON body.")
+            except Exception:
+                logging.warning("send_hr_answer: body was a string but not valid JSON.")
+                body = None
+
+        if isinstance(body, dict):
+            answer = body.get("answer")
+            question = body.get("question")
+            user_email = body.get("user_email")
+            user_full_name = body.get("user_full_name")
+            conversation_id = body.get("conversation_id")
+            agent_label = body.get("agent_label")
+        elif body is not None:
+            logging.warning(f"send_hr_answer: unexpected body type {type(body).__name__}.")
+
+    if not answer or not str(answer).strip():
+        logging.warning("send_hr_answer: returning 400 - no 'answer' in query params or body.")
+        return func.HttpResponse(
+            json.dumps({"error": "Missing required parameter 'answer'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+    answer = str(answer).strip()
+
+    if not user_email:
+        logging.warning("send_hr_answer: returning 400 - no 'user_email' supplied.")
+        return func.HttpResponse(
+            json.dumps({"error": "Missing required parameter 'user_email'"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    # Exactly one recipient: this is a reply to the person who asked, so the
+    # fan-out guardrails that 'send_hr_email' needs do not apply here.
+    recipient = str(user_email).strip().strip("<>").strip()
+    if not EMAIL_RE.match(recipient):
+        logging.warning("send_hr_answer: returning 400 - 'user_email' is not a valid address.")
+        return func.HttpResponse(
+            json.dumps({"error": "Parameter 'user_email' is not a valid email address"}),
+            status_code=400,
+            mimetype="application/json",
+        )
+
+    # Optional allow-list, mirroring HR_ALLOWED_RECIPIENTS on the outbound leg.
+    # Entries may be full addresses ("someone@panynj.gov") or domains
+    # ("@panynj.gov" / "panynj.gov").
+    allowed_raw = os.environ.get("HR_REPLY_ALLOWED_RECIPIENTS", "").strip()
+    if allowed_raw:
+        allowed = [a.strip().lower().lstrip("@") for a in re.split(r"[;,]", allowed_raw) if a.strip()]
+        target = recipient.lower()
+        target_domain = target.split("@", 1)[-1]
+        if target not in allowed and target_domain not in allowed:
+            logging.warning("send_hr_answer: recipient not in HR_REPLY_ALLOWED_RECIPIENTS.")
+            return func.HttpResponse(
+                json.dumps({
+                    "error": "Recipient address is not permitted",
+                    "blocked": recipient,
+                }),
+                status_code=403,
+                mimetype="application/json",
+            )
+    else:
+        logging.warning(
+            "HR_REPLY_ALLOWED_RECIPIENTS is not set; 'user_email' is unrestricted. "
+            "Set it to limit which recipients this endpoint may email."
+        )
+
+    # The reply must come from a shared mailbox. If it is not configured we fail
+    # rather than guessing, because every fallback sender would either leak the
+    # representative's identity or bounce.
+    sender_mailbox = os.environ.get("HR_REPLY_FROM_ADDRESS", "").strip()
+    if not sender_mailbox:
+        logging.error("send_hr_answer: HR_REPLY_FROM_ADDRESS is not configured.")
+        return func.HttpResponse(
+            json.dumps({
+                "sent": False,
+                "error": "Server is not configured: HR_REPLY_FROM_ADDRESS is missing",
+            }),
+            status_code=500,
+            mimetype="application/json",
+        )
+
+    # Display label used in the email subject and telemetry. Collapse whitespace
+    # and cap the length so a caller-supplied value cannot produce a malformed or
+    # oversized subject line.
+    agent_label = normalize_agent_label(agent_label)
+
+    try:
+        # --- Acquire a Microsoft Graph token via the managed identity ---
+        credential = DefaultAzureCredential()
+        token = credential.get_token("https://graph.microsoft.com/.default").token
+
+        # --- Build the message ---
+        # HTML so the answer stays readable when it contains line breaks. Every
+        # interpolated value is escaped: the answer text originates from a form
+        # submission and must not be able to inject markup.
+        greeting_name = str(user_full_name).strip() if user_full_name else ""
+        greeting = f"Hi {greeting_name}," if greeting_name else "Hi,"
+        # Adaptive card multiline inputs deliver CRLF; normalize before converting
+        # to <br> so no stray carriage returns survive into the HTML body.
+        answer_html = html.escape(answer).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+
+        parts = [
+            f"<p>{html.escape(greeting)}</p>",
+            "<p>A member of the HR benefits team has responded to your question.</p>",
+        ]
+        if question and str(question).strip():
+            question_html = (
+                html.escape(str(question).strip())
+                .replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
+            )
+            parts.append(
+                "<p><b>Your question</b><br>"
+                f"<span style=\"color:#555\">{question_html}</span></p>"
+            )
+        parts += [
+            f"<p><b>Response</b><br>{answer_html}</p>",
+            "<hr>",
+            "<p style=\"color:#555;font-size:12px\">"
+            "&#128172; Answered by a person on the HR benefits team, not by the assistant.<br>"
+            "Replies to this message go to the HR benefits mailbox."
+            "</p>",
+        ]
+        email_html = "".join(parts)
+
+        message = {
+            "subject": (
+                f"Response to your question from [{agent_label}]"
+                if agent_label
+                else "Response to your question from the HR benefits team"
+            ),
+            "body": {"contentType": "HTML", "content": email_html},
+            "toRecipients": [{"emailAddress": {"address": recipient}}],
+        }
+
+        graph_payload = {
+            "message": message,
+            "saveToSentItems": True,
+        }
+
+        # --- Send via Graph sendMail ---
+        url = f"https://graph.microsoft.com/v1.0/users/{quote(sender_mailbox)}/sendMail"
+        data = json.dumps(graph_payload).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=data,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=30) as resp:
+            status = resp.status  # 202 Accepted on success
+
+        logging.info(f"HR answer delivered (status {status}) to employee as {sender_mailbox}.")
+        track_event(
+            "HrAnswerDelivered",
+            properties={
+                "question": _truncate(question) if question else None,
+                "userEmail": recipient,
+                "userName": user_full_name,
+                "conversationId": conversation_id,
+                "graphStatus": status,
+                "agentLabel": agent_label or None,
+            },
+            measurements={"answerLength": len(answer)},
+        )
+        return func.HttpResponse(
+            json.dumps({
+                "sent": True,
+                "recipient": recipient,
+                "message": "The response has been emailed to the employee."
+            }),
+            status_code=200,
+            mimetype="application/json",
+        )
+    except urllib.error.HTTPError as http_err:
+        detail = ""
+        try:
+            detail = http_err.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        logging.error(f"Graph sendMail failed: {http_err.code} {detail}")
+        track_event(
+            "HrAnswerDeliveryFailed",
+            properties={
+                "question": _truncate(question) if question else None,
+                "userEmail": recipient,
+                "conversationId": conversation_id,
+                "errorCode": http_err.code,
+                "error": _truncate(detail, 2000),
+                "agentLabel": agent_label or None,
+            },
+        )
+        return func.HttpResponse(
+            json.dumps({"sent": False, "error": f"Graph error {http_err.code}", "detail": detail}),
+            status_code=502,
+            mimetype="application/json",
+        )
+    except Exception as e:
+        logging.error(f"send_hr_answer error: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        track_event(
+            "HrAnswerDeliveryFailed",
+            properties={
+                "question": _truncate(question) if question else None,
+                "userEmail": recipient,
                 "conversationId": conversation_id,
                 "error": _truncate(str(e), 2000),
                 "agentLabel": agent_label or None,
