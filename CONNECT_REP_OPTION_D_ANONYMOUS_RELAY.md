@@ -2218,16 +2218,40 @@ Protocol surface. Reaching for it here would be a dead end.
 #### The blocker: you cannot post *as* `myHealthBenefit`
 
 A Teams proactive message is sent **as a specific bot identity**, authenticated with that bot's
-app credentials. The employee's chat with `myHealthBenefit` belongs to the **Copilot Studio
-agent's** bot identity (App ID `a1d9ba8f-…` in the Teams admin center).
+**App ID *and* app password**. The employee's chat with `myHealthBenefit` belongs to the
+**Copilot Studio agent's** bot identity.
 
-**Copilot Studio owns those credentials and does not expose them.** Your Function cannot
-authenticate as that agent, so it cannot post into that conversation.
+⚠️ **The two halves have different answers, and this is the crux:**
+
+| Credential | Retrievable from Copilot Studio? | Where |
+|---|---|---|
+| **Teams channel App ID** | ✅ **Yes** | **Channels** → **Microsoft 365 and Microsoft Teams** → **Edit details** → expand **More** → **Copy** next to **App ID**. *(Microsoft documents this for SSO configuration.)* You also already have it from the Teams admin center: `a1d9ba8f-…` |
+| **App password / client secret for that identity** | ❌ **No** | Not exposed anywhere in Copilot Studio, the Azure portal, or Entra. Microsoft manages the agent's bot credentials internally |
+
+**An App ID alone cannot authenticate anything.** Posting as a bot requires an App ID **and**
+its secret to obtain a Bot Framework token. Without the secret, the ID is just an identifier.
+
+> ⚠️ **Do not be misled by the client secrets that *are* documented.** Copilot Studio's
+> authentication pages discuss client secrets extensively — but those belong to app
+> registrations **you create** so the agent can authenticate *users* (Entra ID V2 with client
+> secrets, SSO, token exchange). None of them is the agent's own bot-identity credential, and
+> none can be used to send messages as the agent.
+
+> ⚠️ **Direct Line secrets are also not this.** **Settings** → **Security** → **Web channel
+> security** exposes two Direct Line secrets, which genuinely let external code talk to your
+> agent. But Direct Line is a **separate channel**: messages exchanged over it live in a Direct
+> Line conversation, **not** in the employee's Teams chat. Useful for embedding the agent in a
+> web app; useless for delivering into Teams.
+
+> 💡 **This is a deliberate security boundary, not an oversight.** If any tenant application
+> could obtain a Copilot Studio agent's bot credentials, it could impersonate that agent to
+> every user who trusts it. Expect no supported route around it — and treat any unofficial
+> workaround as something your security team would need to approve.
 
 | What you want | Achievable from your own code? |
 |---|---|
-| Message appears in the existing `myHealthBenefit` chat | ❌ No — requires the agent's app credentials |
-| Message appears in a **separate** chat from a **new** bot you own | ✅ Yes |
+| Message appears in the existing `myHealthBenefit` chat | ❌ No — requires the agent's app password, which is not obtainable |
+| Message appears in a **separate** chat from a **new** bot you own | ✅ Yes — you control that bot's credentials |
 
 **Consequence:** the employee ends up with two chats — one with the HR benefits agent, one with
 your relay bot — and the answer arrives in the second. Anonymity survives (still a bot, not a
