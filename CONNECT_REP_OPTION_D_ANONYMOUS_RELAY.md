@@ -450,7 +450,42 @@ conversation — for hours — is worse than the costs of proactive delivery.
 
 ## What proactive delivery requires
 
-Three things, all documented by Microsoft in
+⚠️ **Prerequisite 0 — the agent must run on the standard harness.** Microsoft's proactive
+messaging article opens with: *"This article describes features used in agents or agent flows
+powered by the [standard harness](https://learn.microsoft.com/microsoft-copilot-studio/harnesses-overview#standard-harness)."*
+A *harness* is the runtime between your agent and the model. Copilot Studio has three, and
+**proactive messaging is documented only for the standard harness**.
+
+| Harness | What it powers | Proactive messaging documented? |
+|---|---|---|
+| **Standard** | Rule-based agents and agent flows — topics, branches, defined paths | ✅ Yes |
+| **GitHub Copilot** | Reasoning-heavy agents that plan multi-step work autonomously | ❌ Not covered by that article |
+| **Copilot chat** | Extending Microsoft 365 Copilot Chat with enterprise knowledge | ❌ Not covered |
+
+**How to tell which one you are on:**
+
+1. Open the Copilot Studio **Homepage**.
+2. Look for the **New experience** toggle.
+
+| Toggle state | Harness |
+|---|---|
+| **Off** | ✅ **Standard harness** — what this guide assumes |
+| **On** | ⚠️ GitHub Copilot harness — proactive delivery is undocumented here |
+
+Agents built via **Other ways to build**, or opened from the **Agents** / **Workflows** lists,
+are standard-harness.
+
+> 💡 **A topic-based agent is almost certainly standard harness.** If you author with topics on
+> a canvas, use trigger phrases, and call Power Automate flows as tools, that is the
+> standard-harness authoring model. The GitHub Copilot harness is goal-driven rather than
+> topic-driven.
+
+> ⚠️ **This is worth confirming rather than assuming.** If your agent is on the GitHub Copilot
+> harness, proactive delivery is outside the documented surface — which would make a `403` an
+> unsupported-scenario result rather than a misconfiguration, and changes what to ask Microsoft
+> Support.
+
+Three further requirements, all documented in
 [Send proactive Microsoft Teams messages](https://learn.microsoft.com/microsoft-copilot-studio/advanced-proactive-message).
 
 ### 1. The employee must have the agent installed
@@ -462,8 +497,18 @@ An agent **cannot** deliver a proactive message if the recipient:
 - lacks permission to chat with it (you may need to
   [share the agent](https://learn.microsoft.com/microsoft-copilot-studio/admin-share-bots)).
 
-✅ **In your scenario this is satisfied by definition** — the employee just used the agent to
-ask the question. The realistic failure is someone who removes the agent while waiting.
+⚠️ **"Installed" and "permitted to chat" are separate conditions.** *(Worth re-checking for the
+`403`.)* Being able to open the agent yourself does not prove the **sharing** permission is in
+place — as the agent's owner you have implicit access that other users do not. Microsoft lists
+lacking permission to chat as its own bullet, distinct from installation.
+
+**Verify sharing explicitly:** Copilot Studio → your agent → **Share**. Confirm the intended
+recipients (or the whole organisation) appear. If the agent was only ever shared implicitly via
+admin approval, the underlying access grant may not exist.
+
+✅ **In your scenario installation is satisfied by definition** — the employee just used the
+agent to ask the question. The realistic failures are someone who removes the agent while
+waiting, or a sharing grant that was never made.
 
 ⚠️ **GCC: the agent must be admin-approved before anyone can install it.** Microsoft:
 *"Currently, the only way to approve an agent for Teams is to submit the agent to an admin for
@@ -1644,9 +1689,7 @@ Look for `TeamsAppInstallation.ReadForUser` in the `Scope` output.
 > for connector errors. Creating one speculatively adds an unmanaged identity to your tenant
 > and grants the connector no scope it did not already have.
 
-> 📋 **What a real GCC tenant returned** *(all four candidates checked by a tenant admin)*:
->
-> | Application ID | Name | Result |
+> 📋 **What a real GCC tenant returned** *(all four candidates checked by a tenant admin)*:> | Application ID | Name | Result |
 > |---|---|---|
 > | `fe053c5f-3692-4f14-aef2-ee34fc081cae` | Azure API Connections | **Not present** |
 > | `57fcbcfa-7cee-4eb1-8b25-12d2030b4ee0` | Microsoft Flow | **Not present** |
@@ -1663,7 +1706,20 @@ Look for `TeamsAppInstallation.ReadForUser` in the `Scope` output.
 > is only actionable when the scope is tenant-controlled. Here it is not, so the question moves
 > to Microsoft.
 
-> 🛑 **Stop condition — you have exhausted the tenant-side avenues.** If you have reached this
+> 🛑 **Before the stop condition — two prerequisites that are easy to assume rather than
+> verify.** Both are documented in Microsoft's proactive messaging article and neither shows up
+> in the flow's error payload:
+>
+> | Prerequisite | How to verify | Why it could produce this `403` |
+> |---|---|---|
+> | **Standard harness** | Copilot Studio **Homepage** → **New experience** toggle must be **Off** | Proactive messaging is documented **only** for the standard harness. On the GitHub Copilot harness this is an unsupported scenario, not a misconfiguration |
+> | **Agent shared with the recipient** | Copilot Studio → agent → **Share** | Microsoft lists *"doesn't have permission to chat with the agent"* as a distinct failure from *not installed*. As the agent owner you have implicit access, so testing with your own account cannot detect a missing sharing grant |
+>
+> ⚠️ **Check both before opening a Support case.** They change what you are asking Microsoft:
+> a harness mismatch means "this scenario is not supported for my agent type," while a missing
+> share means the fix is yours. Neither is visible in the `403` payload.
+
+> 🛑 **Stop condition — you have exhausted the tenant-side avenues.** If you have reached
 > point with:
 >
 > - a **live** `403` (`cached-response: false`),
@@ -1960,6 +2016,188 @@ If you want to investigate it anyway, two things are worth checking first:
 > in Microsoft Teams"* but *"aren't supported for Microsoft 365 Copilot and telephony
 > channels."* Proactive delivery has the same Teams-only constraint, so this is not a reason to
 > prefer one over the other — but do not reuse either pattern on those channels.
+
+
+### ⚠️ The async continuation pattern — sound pattern, narrow fit
+
+Documented by the Copilot Studio CAT team in
+[Combining Agent Flows with Agents](https://microsoft.github.io/mcscatblog/posts/combining-agent-flows-and-agents-gotchas-errors-and-patterns/).
+It tackles the same 100-second wall this guide's build tackles. **It does not replace proactive
+delivery for the 8-hour scenario** — but it is a real candidate if HR can answer within minutes
+while the employee stays in the chat. Both cases are covered below.
+
+**The pattern:**
+
+```
+Agent calls the flow (tool call)
+    ├─► short synchronous work
+    ├─► Respond to the agent        ← within 100 s; agent released here
+    ├─► long-running work (approval, human-in-the-loop)
+    └─► Execute Agent               ← flow invokes the agent again with results
+             Conversation ID: the original System.Conversation.Id
+```
+
+⚠️ **Why it cannot deliver the answer to your employee.** Microsoft's
+[connector reference](https://learn.microsoft.com/connectors/microsoftcopilotstudio/) defines
+what these actions return:
+
+| Action | Returns | Pushes a message to a Teams user? |
+|---|---|---|
+| **Execute Agent** | `ConversationId` only | ❌ No |
+| **Execute Agent and wait** | `lastResponse`, `responses`, `conversationId` — **back into the flow** | ❌ No |
+
+Both send a prompt **into** an agent and hand the result **back to the calling flow**. Neither
+surfaces anything in a user's Teams chat. The CAT article's own example states the consequence:
+the agent *"resumes to deliver the news to the user"* — which assumes the user is **present in
+an active conversation** when the callback lands.
+
+**That is the opposite of this scenario.** The employee asks, then moves on; HR may answer
+hours later. There is no live conversation to resume — which is precisely the gap
+[proactive messaging](https://learn.microsoft.com/microsoft-copilot-studio/advanced-proactive-message)
+exists to fill.
+
+> ⚠️ **Switching patterns does not avoid the `403` for the long-wait design.** To surface a
+> message in a Teams chat when the user is *not* there, something must call the proactive
+> messaging API — the call currently being refused. This pattern changes *when the agent is
+> released*; it does not change *how a message reaches an absent user*. It only becomes an
+> option if you redefine the feature around a fast, in-session reply — see below.
+
+**Where the pattern genuinely fits:**
+
+| Scenario | Fit |
+|---|---|
+| User waits in-session while a flow runs 2–5 minutes | ✅ Strong |
+| Approval where the requester is actively chatting | ✅ Strong — the article's expense example |
+| Answer arriving hours later to an absent user | ❌ No delivery mechanism |
+
+#### ⚠️ The "HR answers in minutes" variant — plausible, unverified, and a different product
+
+If you can guarantee HR answers within **a few minutes** *and* the employee stays in the chat,
+this pattern becomes a genuine candidate. Microsoft documents the mechanism that would make it
+work:
+
+> **Conversation ID** — *"Provide an existing conversation ID to continue an agent
+> conversation."*
+
+Pass `System.Conversation.Id` into the flow, then supply the same value to **Execute Agent**.
+In principle the callback turn lands in the employee's existing Teams conversation, with no
+proactive messaging API involved — and therefore no `403`.
+
+⚠️ **This is unverified.** Microsoft documents that the Conversation ID *continues* a
+conversation; it does not state that a flow-initiated turn is **rendered in the user's Teams
+client**. `Execute Agent` returns only `ConversationId` to the flow, and `Execute Agent and
+wait` returns the agent's text back to the flow — neither return shape proves user-visible
+delivery. **Do not build on this assumption without testing it.**
+
+**The 20-minute test that settles it:**
+
+1. Build a throwaway flow: **When an agent calls the flow** (input: `ConversationId`, text) →
+   **Respond to the agent** (`"Working on it"`) → **Delay 2 minutes** → **Execute Agent**
+   with **Conversation ID** = the passed-in value and **Message** = `"Test callback"`.
+2. Call it from a topic, passing `System.Conversation.Id`.
+3. Run it **in Teams**, not the test panel — the test panel has its own
+   [unrelated rendering issue](#test-panel-silent-while-teams-works).
+4. Stay in the chat and wait.
+
+| Result | Meaning |
+|---|---|
+| `"Test callback"` appears in the chat | ✅ Mechanism works — the pattern is viable for the fast-answer variant |
+| Nothing appears, flow shows Succeeded | ❌ The callback is not user-visible; proactive messaging remains the only route |
+
+⚠️ **Even if the test passes, this is a different product.** The design stops being *"ask and
+get on with your day"* and becomes *"wait in the chat while HR replies."* That requires:
+
+| Requirement | Consequence |
+|---|---|
+| HR answers within minutes, **consistently** | The channel must be actively staffed during all hours the agent offers escalation |
+| The employee stays in the conversation | No closing Teams, no switching to another task for long |
+| A timeout path that still works | If HR misses the window, the employee is waiting with nothing — the same
+[timeout branch](#handle-the-timeout-branch) is still required |
+
+> 💡 **Ask HR before building it.** *"Can you answer every escalation within five minutes,
+> during every hour the agent is available?"* If the honest answer is no, the fast-answer
+> variant fails in exactly the cases that matter most — the employee waits, gets a timeout
+> message, and trusts the feature less than if it had promised a slower reply up front.
+
+> 💡 **If the answer is yes, the whole design gets simpler.** A reliably staffed channel with a
+> short window means the timeout can drop to `PT5M`, failures surface immediately rather than
+> hours later, and you need no proactive delivery at all — which removes the `403` from the
+> critical path entirely.
+
+#### How long does a Teams conversation stay addressable?
+
+**There is no documented minute value.** Microsoft publishes no "conversation active" timeout
+for the Teams channel, and the figures that circulate mean other things:
+
+| Figure | What it actually governs | Blocks a later callback? |
+|---|---|---|
+| **30 minutes** inactivity | A **new transcript record** is started. Microsoft: if the conversation resumes later, activities are saved to a new record with the same `Name` but a new `ConversationStartTime` | ❌ No — the conversation *resumes*, it is an analytics boundary |
+| **30 minutes** auto-close | **Dynamics 365 Customer Service** conversations only | ❌ No — not the Teams channel |
+| **30 / 60 minutes** session | *Billed sessions* under the withdrawn **legacy Power Virtual Agents licence** | ❌ No — a billing boundary |
+
+**Evidence that Teams conversations stay addressable indefinitely.** Microsoft's inactivity
+trigger guidance describes Teams as a *"persistent, single-conversation model"* where the
+conversation *"never truly 'ends' from Teams' perspective"* — and documents as a **problem**
+that inactivity triggers *"keep refiring"*, with users *"receiving repeated 'are you still
+there?' messages hours or days later."*
+
+> 💡 **That is a meaningful signal.** An inactivity trigger is a **server-initiated message
+> rendered in a user's Teams chat without the proactive messaging API**, firing hours after the
+> user stopped typing. It proves the conversation remains addressable and that Copilot Studio
+> can push into it. It does **not** prove `Execute Agent` uses the same delivery path.
+
+⚠️ **Precedent for the exact failure mode to watch for.** The same channel-support matrix
+records, for **Microsoft 365 Copilot**: *"Trigger fires, but **messages aren't delivered**. The
+trigger executes server-side, but the Microsoft 365 Copilot UI doesn't display proactive
+messages from agents. **No workaround.**"*
+
+**Server-side success with no user-visible message is a documented outcome on at least one
+channel.** Teams is listed as **Supported**, so this is a caution rather than a prediction —
+but it is why the mechanism must be tested rather than assumed.
+
+⚠️ **This matters directly for your agent**, which has **Make agent available in Microsoft 365
+Copilot** enabled. If an employee escalates from the M365 Copilot surface rather than the Teams
+app, a callback may execute and never appear.
+
+**So what happens at 10, 30, and 60 minutes?**
+
+| Wait | Documented blocker | Realistic expectation |
+|---|---|---|
+| **10 min** | None | Most likely to work if the mechanism works at all |
+| **30 min** | None for delivery — crosses only the transcript boundary | Should behave the same as 10 min |
+| **60 min** | None documented | No published limit; genuinely untested |
+
+⚠️ **The duration is the second question, not the first.** Nothing documented breaks at 10, 30,
+or 60 minutes — but whether an `Execute Agent` callback renders in the user's Teams client is
+unverified at **any** duration. Establish that it works at two minutes before asking how far it
+stretches.
+
+> ⚠️ **One documented risk that does grow with time:** Microsoft notes for Teams that
+> *"auth tokens might expire during long inactivity periods."* Your agent uses **Authenticate
+> with Microsoft**, so a long gap could affect the turn that delivers the answer.
+
+**Test at the durations you actually intend to promise:**
+
+1. Confirm the mechanism at **2 minutes** (the isolation test above). If it fails here, duration
+   is irrelevant.
+2. Repeat at **10 minutes**, then at your real target — **30** or **60**.
+3. For each run, leave the Teams chat **open but idle**, and note whether the message appears.
+4. Test the M365 Copilot surface separately if employees may use it.
+
+> 💡 **Promise the duration you have tested, not the one you hope for.** The timeout branch is
+> what protects the employee when HR misses the window, so set the card timeout to match the
+> tested window rather than an aspirational one.
+
+
+> 💡 **It does corroborate the diagnosis.** The article confirms that placing **Respond to the
+> agent** *early* releases the agent, and that long-running work belongs *after* it. That
+> matches the blocking defect you observed — the agent was parked because the response only
+> came once HR answered. Useful validation; not an alternative delivery route.
+
+> 💡 **Two other items worth keeping from that article:** `FlowActionBadRequest` after changing
+> flow inputs or outputs is fixed with **… → Refresh** on the Action node in the topic. And
+> agent flows natively support only **Text, Boolean, and Number** — Tables and Records require
+> conversion.
 
 ### If you need a shorter, staffed window
 
@@ -2271,6 +2509,7 @@ customEvents
 | Employee gets the real answer **and then** "nobody answered" | Second delivery action was added sequentially, so both fire | Re-add it as a **parallel branch** off the card action |
 | Auth prompt or failure on the delivering turn | **Connector tokens can expire during long Teams threads** | Documented Teams risk; have the employee reauthenticate, or shorten the wait window |
 | Agent behaves oddly in a long-lived thread | Teams keeps conversation history indefinitely; context accumulates | `/debug clearstate` in the Teams chat resets conversation state |
+| **Test panel shows no reply, but the same agent works in Teams** | ⚠️ **Not your build.** Copilot Studio's test panel receives replies over a `/subscribe` Server-Sent Events stream. A corporate firewall or proxy doing HTTPS/TLS inspection buffers that stream, so the reply never renders — even though the backend ran | See [Test panel silent while Teams works](#test-panel-silent-while-teams-works) |
 | Card posts, but buttons error | Used the plain "post" action | Use **"…and wait for a response"** |
 | **Post in** is a free-text box instead of a dropdown | **Post as** is set to `Microsoft Copilot Studio agent`, which only supports personal chats | Set **Post as** to `Flow bot` ([Step D.3](#step-d3--post-the-card-and-wait-for-an-answer)). Do not paste a channel ID into the text box |
 | Sign-in popup blocked when adding the Teams action | The connector uses OAuth and needs a popup | Allow popups **and** third-party cookies for `[*.]powerautomate.com` and `[*.]microsoft.us`, then retry. If sign-in loops, sign out *inside* the popup and back in within the same window |
@@ -2296,6 +2535,86 @@ advice for stale-version problems, but on this build they will silently stop HR 
 reaching employees. Try **Republish** first, and if you must reconnect the channel, tell users
 to reinstall — see
 [Reconnecting the agent to Teams silently breaks delivery](#4-reconnecting-the-agent-to-teams-silently-breaks-delivery).
+
+---
+
+### Test panel silent while Teams works
+
+**Symptom.** You submit a prompt in Copilot Studio's **Test your agent** panel. It shows a
+thinking indicator for a second or two, then nothing. The backend clearly ran — your Function
+App logs show the call succeeding — and the **published** agent answers correctly in Teams.
+
+⚠️ **This is a documented Copilot Studio issue and is unrelated to your topic or flow.** The
+give-away is the split: the *same* agent version works in Teams but not in the test panel.
+A broken topic or flow would fail in both.
+
+**Cause.** The test panel receives replies over a **`/subscribe`** connection using
+**Server-Sent Events** — a long-lived HTTP stream. Teams does not use this path. A corporate
+firewall or proxy performing HTTPS/TLS inspection **buffers the stream until the request
+completes**, so the reply is generated but never rendered.
+
+Microsoft lists **agent flows** and **certain connectors** among the features that trigger
+this, which is why it may have appeared around the time you added the relay flow — correlation,
+not causation.
+
+> 🛑 **Rule this out first — it is more common than the firewall cause.** In the test panel,
+> look at the **Conversational boosting** topic (or whichever topic calls your Function) on the
+> canvas. If a node is **selected/highlighted** and the canvas shows the topic mid-execution,
+> the conversation is **paused inside the topic**, not blocked by a network layer.
+>
+> | What you observe | Meaning |
+> |---|---|
+> | Your prompts appear as **unanswered bubbles**, and the greeting is the only agent reply | The topic ran but never reached a **Send a message** node |
+> | A node on the canvas is highlighted while you test | The test panel is **stepping through** the topic — it is executing, not blocked |
+> | The Function App logs a **successful** call | ✅ The tool worked; the failure is *after* it, in the topic |
+>
+> **The likely cause:** the topic calls the action, receives outputs, and then **ends without a
+> `Send a message` node** to speak the result. In Teams the fallback or generative answer may
+> cover this, which is exactly why the published agent still appears to work.
+>
+> **Check:** scroll to the **end** of the topic branch after the **Action** node. Confirm there
+> is a **Send a message** node that outputs the Function's answer variable. If the branch ends
+> at the action, the agent has nothing to say.
+>
+> ⚠️ **This matters more than the test panel.** If the topic never speaks the Function's
+> answer, employees may be receiving generative fallbacks rather than your Function's real
+> response — a correctness problem, not just a testing annoyance.
+
+**If the topic looks correct, confirm the firewall cause in about a minute:**
+
+1. Open browser developer tools (**F12**).
+2. Select the **Network** tab.
+3. Start a new conversation in the test panel and send a prompt.
+4. Find the **`/subscribe`** request. The path resembles:
+
+   ```
+   https://pvaruntime.<Geo>-il<Island>.gateway.prod.island.powerapps.com/environment/<EnvironmentId>/<BotId>/test/conversations/<ConversationId>/subscribe
+   ```
+
+| What you see | Meaning |
+|---|---|
+| **Size** is `0`, or **Time** stuck at **Pending** | ✅ Confirms the diagnosis — the stream is being buffered |
+| Request **missing or blocked** | ✅ Same conclusion — the firewall is dropping it |
+| Healthy, with content under **EventStream** | ❌ Different problem — look elsewhere |
+
+> 💡 **Second confirmation:** check the **Activity** tab or the conversation transcript. If the
+> reply is recorded there but never appeared in the chat pane, the agent responded correctly
+> and only the delivery channel failed.
+
+**Fix.** Ask your network team to add an allow, bypass, or exempt rule for the Copilot Studio
+`/subscribe` path so it is not subject to TLS inspection or buffering. Microsoft's full list is
+under
+[Required services](https://learn.microsoft.com/microsoft-copilot-studio/requirements-quotas#required-services).
+
+**Workarounds while you wait:**
+
+- **Test in Teams instead.** The published agent uses a different delivery path and is
+  unaffected — and it is closer to what employees actually experience.
+- **Try a different network.** A personal hotspot bypasses the corporate proxy and isolates the
+  cause in seconds.
+
+⚠️ **Do not rebuild your topic or flow to chase this.** Nothing in the agent is wrong. Changing
+a working build in response to a network-layer symptom risks introducing a real defect.
 
 ---
 
