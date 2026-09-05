@@ -542,9 +542,16 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 @app.route(route="agent_httptrigger")
 def agent_httptrigger(req: func.HttpRequest) -> func.HttpResponse:
     """
-    HTTP trigger function that creates and interacts with AI Foundry agents using the 
-    Microsoft Foundry Agent Framework SDK (agent-framework-azure-ai).
-    
+    HTTP trigger function that invokes an existing AI Foundry agent using the
+    Foundry SDK (azure-ai-projects): AIProjectClient -> get_openai_client() ->
+    the OpenAI Responses and Conversations APIs.
+
+    Not the Microsoft Agent Framework (agent-framework-*). That SDK targets
+    multi-agent orchestration and Foundry Hosted Agents; this endpoint serves a
+    single agent per request, so it would add a dependency layer without
+    replacing one. Revisit only if multiple agents with handoff, or Foundry
+    Hosted Agents, are adopted.
+
     Parameters (query string or JSON body):
         - message: User message to send to the agent (required)
         - agent_label: User-friendly display name for the agent (optional, e.g. 'HR Benefits Assistant').
