@@ -91,18 +91,26 @@ your account has Log Analytics Reader there.
 > you hit unexplained SSL errors.
 
 ### Government cloud (GCC) note
-Your tenant is GCC, so the service endpoints differ from commercial. The correct values:
+Your **Power Platform** tenant is GCC, but your **Azure subscriptions are commercial**, so the
+two sides use different endpoints. Application Insights lives in Azure, so it uses the
+commercial addresses:
 
-| Purpose | Commercial | US Government |
+| Purpose | Cloud | Use |
 |---|---|---|
-| Power BI service | `app.powerbi.com` | `app.powerbigov.us` |
-| Azure Portal | `portal.azure.com` | `portal.azure.us` |
-| Query REST API (M query) | `api.applicationinsights.io` | `api.applicationinsights.us` |
-| ADX proxy (Kusto connector) | `ade.applicationinsights.io` | `adx.monitor.azure.us` |
+| Power BI service | Follows your M365 tenant (GCC) | `app.powerbigov.us` |
+| Azure Portal | **Commercial** | `portal.azure.com` |
+| Query REST API (M query) | **Commercial** | `api.applicationinsights.io` |
+| ADX proxy (Kusto connector) | **Commercial** | `ade.applicationinsights.io` |
 
-⚠️ Note the ADX proxy is **not** a simple `.io` → `.us` swap — the Government host is
-`adx.monitor.azure.us`, a completely different name. (Azure operated by 21Vianet uses
-`adx.monitor.azure.cn`.)
+> ⚠️ **Do not use the `.us` Azure endpoints** (`portal.azure.us`,
+> `api.applicationinsights.us`, `adx.monitor.azure.us`). Those are for subscriptions in Azure
+> Government. Pointing Power BI at them resolves to nothing, because your App Insights
+> resource is not there. If you ever move Azure to Government, the ADX proxy is **not** a
+> simple `.io` → `.us` swap — it becomes `adx.monitor.azure.us`, a different host name.
+
+> **Power BI itself is the cross-cloud hop here:** the report runs in GCC Power BI while
+> querying commercial App Insights. That is the same boundary your GCC flows already cross to
+> call the Function.
 
 **Do not hand-type endpoints.** Use the *"Export → Power BI (M query)"* method in
 [Step 1.2](#step-12--export-the-m-query) — Azure generates the correct URL for **your** cloud
@@ -193,7 +201,8 @@ full detail; Methods B and C are covered afterwards for specific situations.
 
 **Do this before touching Power BI.** Connecting to an empty query wastes a lot of time.
 
-1. Sign in to the Azure Portal (`portal.azure.us` for GCC).
+1. Sign in to the Azure Portal (`portal.azure.com` — your Azure subscriptions are commercial,
+   even though Power Platform is GCC).
 2. Navigate to your Application Insights resource.
    - Search "Application Insights" in the top bar, or go to
      **Resource groups → TEC-AGENTIC-AI-RG →** your App Insights resource.
@@ -457,10 +466,10 @@ Use this **only if you need DirectQuery** (near real-time dashboards without ref
 2. **Cluster** — enter the ADX proxy URL for your resource:
 
 ```
-Commercial:
+Your environment (commercial Azure):
 https://ade.applicationinsights.io/subscriptions/<sub-id>/resourcegroups/<rg>/providers/microsoft.insights/components/<ai-name>
 
-US Government:
+Only if Azure is in Government (not your case):
 https://adx.monitor.azure.us/subscriptions/<sub-id>/resourcegroups/<rg>/providers/microsoft.insights/components/<ai-name>
 ```
 
@@ -1422,7 +1431,7 @@ customEvents
 |---|---|---|
 | `We couldn't authenticate with the credentials provided` | Wrong auth type selected | **Data source settings** → find the App Insights URL → **Edit Permissions** → **Credentials: Organizational account** → Sign in |
 | `Access to the resource is forbidden` (403) | Account lacks read on the **linked Log Analytics workspace** | Grant **Log Analytics Reader** on the workspace, not just the App Insights resource. See [Permissions required](#permissions-required) |
-| `The remote name could not be resolved` | Wrong cloud endpoint (commercial URL in GCC) | Re-export the M query from **your** portal (`portal.azure.us`). See [Government cloud note](#government-cloud-gcc-note) |
+| `The remote name could not be resolved` | Used a `.us` Azure endpoint for a commercial resource | Re-export the M query from `portal.azure.com`. See [Government cloud note](#government-cloud-gcc-note) |
 | `The underlying connection was closed` / SSL errors | TLS 1.2 not enabled, or corporate proxy TLS interception | Update Power BI Desktop. Your environment has a known TLS-intercepting proxy — may need a firewall exception for `*.applicationinsights.io` / `.us` |
 | `Token Comma expected` in Advanced Editor | Unescaped `"` in hand-edited KQL | Double every quote (`""`), or re-export from the portal |
 | `Expression.SyntaxError` on paste | Included the `/* ... */` header comment | Paste only from `let AnalyticsQuery =` onward |

@@ -73,7 +73,7 @@ feedback call is what lets you correlate a thumbs-down with the exact question, 
 > | Copilot Studio | `copilotstudio.microsoft.com` | **`gcc.powerva.microsoft.us`** |
 > | Power Automate | `flow.microsoft.com` | **`gov.flow.microsoft.us`** |
 > | Power Platform admin | `admin.powerplatform.microsoft.com` | **`gcc.admin.powerplatform.microsoft.us`** |
-> | Azure Portal | `portal.azure.com` | **`portal.azure.us`** |
+> | Azure Portal | `portal.azure.com` | Use **`portal.azure.com`** — Azure is commercial |
 
 ---
 

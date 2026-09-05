@@ -207,7 +207,7 @@ addresses. This is why the deep link in Option A works for you unchanged.
 > | Copilot Studio | `copilotstudio.microsoft.com` | **`gcc.powerva.microsoft.us`** |
 > | Power Automate | `flow.microsoft.com` | **`gov.flow.microsoft.us`** |
 > | Power Platform admin | `admin.powerplatform.microsoft.com` | **`gcc.admin.powerplatform.microsoft.us`** |
-> | Azure Portal | `portal.azure.com` | `portal.azure.us` |
+> | Azure Portal | `portal.azure.com` | Use **`portal.azure.com`** — your Azure subscriptions are commercial |
 > | Teams (deep links) | `teams.microsoft.com` | `teams.microsoft.com` (unchanged — GCC is not sovereign) |
 >
 > ⚠️ **Correction:** earlier drafts of this document — and
@@ -758,7 +758,7 @@ Only after Step B.1 succeeded.
 
 5. Click **See how to register a new Application ID** and follow the steps to create an app
    registration.
-6. In the Azure Portal (`portal.azure.us`) → **App registrations** → **Overview**, copy the
+6. In the Azure Portal (`portal.azure.com` — Azure is commercial; only Power Platform is GCC) → **App registrations** → **Overview**, copy the
    **Application (client) ID**.
 7. Paste it into the **Application ID** box in Copilot Studio.
 

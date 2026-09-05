@@ -122,7 +122,11 @@ table — **not** simple `.com` → `.us` swaps, so do not guess them.
 | Copilot Studio | `copilotstudio.microsoft.com` | **`gcc.powerva.microsoft.us`** |
 | Power Automate | `flow.microsoft.com` | **`gov.flow.microsoft.us`** |
 | Power Platform admin | `admin.powerplatform.microsoft.com` | **`gcc.admin.powerplatform.microsoft.us`** |
-| Azure Portal | `portal.azure.com` | `portal.azure.us` |
+
+> ⚠️ **Only the Power Platform side is GCC.** The Azure subscriptions hosting the Function
+> App, Application Insights and the AI Foundry project are **commercial**, so use
+> `portal.azure.com` — not `portal.azure.us`. Every call from a GCC flow to the Function
+> already crosses that cloud boundary today, which is expected and works.
 
 ⚠️ **Adaptive Cards are not available in DoD.** GCC is unaffected.
 

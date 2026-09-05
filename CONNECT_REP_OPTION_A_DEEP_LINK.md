@@ -96,7 +96,7 @@ table — they are **not** simple `.com` → `.us` swaps, so do not guess them.
 |---|---|---|
 | Copilot Studio | `copilotstudio.microsoft.com` | **`gcc.powerva.microsoft.us`** |
 | Power Automate | `flow.microsoft.com` | **`gov.flow.microsoft.us`** |
-| Azure Portal | `portal.azure.com` | `portal.azure.us` |
+| Azure Portal | `portal.azure.com` | Use **`portal.azure.com`** — your Azure subscriptions are commercial |
 | Teams (deep links) | `teams.microsoft.com` | `teams.microsoft.com` (**unchanged** — GCC is not a sovereign endpoint) |
 
 ✅ **That last row is why this option works unmodified.** Only GCC High

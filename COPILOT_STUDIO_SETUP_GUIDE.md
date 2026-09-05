@@ -103,11 +103,15 @@ commercial ones you will see in most Microsoft documentation. They are **not** s
 `.com` → `.us` swaps — see
 [Copilot Studio US Government service URLs](https://learn.microsoft.com/microsoft-copilot-studio/requirements-licensing-gcc#microsoft-copilot-studio-us-government-service-urls).
 
-| Website | **Your GCC URL** | Commercial equivalent (do not use) | What it is for |
+| Website | **Your URL** | Do not use | What it is for |
 |---|---|---|---|
 | **Copilot Studio** | https://gcc.powerva.microsoft.us | `copilotstudio.microsoft.com` | Building the agent's conversation logic |
 | **Power Automate** | https://gov.flow.microsoft.us | `flow.microsoft.com` | Building the flow that calls your Azure Function |
-| **Azure Portal** | https://portal.azure.us | `portal.azure.com` | Copying the function key |
+| **Azure Portal** | https://portal.azure.com | `portal.azure.us` | Copying the function key |
+
+> Only the **Power Platform** side is GCC. Your Azure subscriptions — Function App,
+> Application Insights, AI Foundry — are **commercial**, so the Azure Portal is the ordinary
+> `portal.azure.com`. A GCC flow calling the Function crosses that cloud boundary by design.
 
 ### Step 0.0 — Open your agent
 1. Go to https://gcc.powerva.microsoft.us and sign in with your work account.
