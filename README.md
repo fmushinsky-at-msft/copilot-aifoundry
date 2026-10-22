@@ -90,12 +90,20 @@ Configure the following settings in `local.settings.json` (local development) or
 | Variable | Required | Description |
 |---|---|---|
 | `AIProjectEndpoint` | **Yes** | The endpoint URL for your Azure AI Foundry project (e.g. `https://<resource>.services.ai.azure.com/api/projects/<project>`). Used to authenticate and communicate with the AI Project Client. |
+| `AGENT_ID` | **Yes** | The **name** of the Foundry agent that serves requests (not a GUID — the code calls `agents.get(agent_name=...)`). Callers cannot override it per request. |
+| `ModelDeploymentName` | **Yes** | The name of your model deployment (e.g. `gpt-4o`), exactly as shown in the Foundry portal. Defaults to `gpt-5.5`, which is unlikely to match your deployment. |
 | `FUNCTIONS_WORKER_RUNTIME` | **Yes** | Must be set to `python`. Tells the Azure Functions host which language runtime to use. |
 | `AzureWebJobsStorage` | **Yes** | Connection string for the Azure Storage account used by the Functions host. Use `UseDevelopmentStorage=true` for local development with Azurite. |
-| `AzureWebJobsFeatureFlags` | **Yes** | Set to `EnableWorkerIndexing` to enable the Python v2 programming model. |
-| `ModelDeploymentName` | No | The name of the model deployment to use (e.g. `gpt-4o`). Only needed if your agent logic references it. |
-| `AGENT_ID` | No | A default agent ID. The HTTP trigger accepts `agentid` per request, but this can serve as a fallback or reference. |
-| `AGENT_INSTRUCTIONS_TEMPLATE` | No | A template string for the agent's system instructions. Supports placeholders like `{username}` for personalization. |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | Recommended | Enables `track_event` custom events. Without it, telemetry degrades to plain traces and the KQL dashboards return nothing. |
+| `MAX_CONVERSATION_TURNS` | Recommended | Caps conversation history before the model context window overflows. Default `8`; set `0` to disable. |
+| `REQUIRE_USER_ID` | Recommended | When `true`, calls without an authenticated `user_id` return `400`. Enable once the Copilot Studio identity inputs use *Custom value*. See [IDENTITY_SPOOFING_HARDENING.md](./IDENTITY_SPOOFING_HARDENING.md). |
+| `IDENTITY_GUARD_MODE` | No | Leave unset. Defaults to `enforce`, which refuses chat text that asserts another identity (e.g. `userid:XYZ`). `monitor` only logs it and does **not** protect the request; use it briefly during rollout, then remove it. Any other value enforces. |
+| `AGENT_INSTRUCTIONS_TEMPLATE` | No | A template string for the agent's system instructions. Placeholders such as `{user_id}` and `{user_full_name}` are filled from the request's `parameters` object, which the Copilot Studio flow sends. A placeholder with no matching key returns `400`. |
+| `AzureWebJobsFeatureFlags` | No | `EnableWorkerIndexing` was required by older runtimes. The Python v2 model is the default on current runtimes. |
+
+> For the full list of environment variables (including those used by `send_hr_email` and
+> `send_hr_answer`) and step-by-step provisioning, see
+> [FOUNDRY_SETUP_CHECKLIST.md](./FOUNDRY_SETUP_CHECKLIST.md).
 
 ### Authentication
 
@@ -105,4 +113,13 @@ The function uses `DefaultAzureCredential` from the `azure-identity` SDK, which 
 2. **Managed Identity** (when deployed to Azure)
 3. **Azure CLI / VS Code** (for local development)
 
-No API keys are passed in code — ensure the identity running the function has the appropriate **Azure AI Developer** (or equivalent) role on the AI Foundry project.
+No API keys are passed in code. Grant the Function App's managed identity the
+**Foundry Agent Consumer** role on the Foundry resource — this is the least-privilege role
+that can call agent endpoints.
+
+> ⚠️ **`Owner` and `Contributor` do not work.** Per Microsoft's
+> [hosted agent permissions reference](https://learn.microsoft.com/azure/foundry/agents/concepts/hosted-agent-permissions),
+> neither role can interact with agent endpoints. Use **Foundry Agent Consumer** (or
+> **Foundry User** if the identity also needs to create or modify agents). These roles were
+> recently renamed — **Foundry User** was previously **Azure AI User** — so the portal may
+> still show older names.

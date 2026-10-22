@@ -424,15 +424,29 @@ Copilot Studio automatically creates a branch for each option.
 > **Where do `user_full_name` and `user_id` come from?**
 > These are the same two values your existing **Flow A** already sends to Azure as
 > `parameters.user_full_name` and `parameters.user_id`.
-> To find them:
-> 1. Open the topic and look at the **inputs** already being passed to the Flow A node —
->    they will be topic variables (e.g. `Topic.UserName`, `Topic.UserId`) or system values.
-> 2. Reuse **exactly those same variables** here.
+> To check what Flow A currently sends:
+> 1. Open the topic and look at the **inputs** passed to the Flow A node.
+> 2. Each identity input must be a **Custom value** taken from the signed-in user (`System.User.*`),
+>    as described below. If one is a topic variable that is not set from `System.User.*`, or is set to *Dynamically fill with AI*,
+>    change it before reusing it here.
 >
-> If your agent does not collect them, you can use the built-in Copilot Studio values
-> instead: in the variable picker choose the **System** tab and select
-> **User.DisplayName** for the name. If you have no employee id available, leave `user_id`
-> empty — the Azure Function treats it as optional.
+> **Security: these three values must never come from what the user typed.** Set each input
+> to **Custom value** (not the default **Dynamically fill with AI**) and use the signed-in
+> user's identity:
+>
+> | Input | Custom value (Power Fx) |
+> |---|---|
+> | `user_full_name` | `System.User.DisplayName` |
+> | `user_email` | `System.User.PrincipalName` (as the exported agent does) or `System.User.Email` |
+> | `user_id` | `Topic.username`, set at the top of the Search topic to `Substitute(Upper(System.User.PrincipalName), "@PANYNJ.GOV", "")` |
+>
+> With the default AI-fill, a message such as `userid:SOMEONE` is read out of the chat text and
+> passed as the identity, which lets one employee see another's data. Do **not** feed these
+> inputs from a Question node, `Activity.Text`, or any topic variable filled from conversation.
+> Full explanation and tests: [IDENTITY_SPOOFING_HARDENING.md](./IDENTITY_SPOOFING_HARDENING.md#4-copilot-studio-stop-the-flows-identity-being-ai-filled).
+>
+> If you have no employee id available, leave `user_id` empty — the Function treats it as optional
+> (unless `REQUIRE_USER_ID` is on).
 
 4. Click **+** below the tool node → **Send a message**.
 5. Either insert the flow's **result** output using **{x}**, or type a fixed message:

@@ -237,6 +237,9 @@ Location: **Copilot Studio → your agent → Topics → the topic that calls th
 	  - `user_email` → **System → User.PrincipalName** (required; see Section 5)
 	  - `conversation_id` → `threadId` from the agent action
 	  - `to_address` → the HR mailbox(es); one address, or several separated by `;`
+	> ⚠️ **Identity inputs must be *Custom value*, never *Dynamically fill with AI*.** `send_hr_email`
+	> sends mail **as** `user_email`, so an AI-filled value lets one employee send mail as another.
+	> See [IDENTITY_SPOOFING_HARDENING.md](./IDENTITY_SPOOFING_HARDENING.md#4-copilot-studio-stop-the-flows-identity-being-ai-filled).
 	- ☐ After it returns → **Send a message** with the confirmation (`message`:
 	  "Your question has been emailed to HR.").
 	- ☐ On **No** → send a courteous closing message.

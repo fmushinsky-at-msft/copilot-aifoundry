@@ -1,7 +1,7 @@
 # Application Insights — Usage Analytics (KQL)
 
 The Azure Function emits **custom events** to Application Insights for every agent
-interaction and every email send. They land in the **`customEvents`** table.
+interaction, every email send, and every blocked identity-override attempt. They land in the **`customEvents`** table.
 
 ## Events emitted
 
@@ -12,6 +12,11 @@ interaction and every email send. They land in the **`customEvents`** table.
 | `EmailSent` | HR email delivered successfully | `question`, `userEmail`, `userId`, `userName`, `conversationId`, `hrAddress` (all recipients, comma separated), `graphStatus`, `recipientCount`, `agentLabel` |
 | `EmailFailed` | HR email failed | `question`, `userEmail`, `errorCode`, `error`, `agentLabel` |
 | `UserFeedback` | User rates an answer 👍/👎 | `rating` (`positive`/`negative`), `rawRating`, `comment`, `hasComment`, `conversationId`, `userId`, `userName`, `userEmail`, `agentLabel`, and `question` **only for negative feedback** |
+| `HrAnswerDelivered` | `send_hr_answer` emailed an HR answer back to the employee | `userEmail`, `userName`, `conversationId`, `graphStatus`, `agentLabel`, `question`, `answerLength` |
+| `HrAnswerDeliveryFailed` | `send_hr_answer` failed to deliver | `userEmail`, `conversationId`, `errorCode`, `error`, `agentLabel`, `question` |
+| `IdentityOverrideBlocked` | Chat text asserted or switched an identity (e.g. `userid:XYZ`) and was refused **before** any model call | `reason` (`id_assertion`, `impersonation`, `user_id_echoed_from_message`), `matched`, `userId` (the authenticated user who tried it), `question`, `conversationId`, `agentLabel` |
+| `IdentityOverrideDetected` | Same detection as above while `IDENTITY_GUARD_MODE=monitor`; the request was **not** blocked and reached the model | `reason`, `matched`, `userId`, `question`, `conversationId`, `agentLabel` |
+| `IdentityMissing` | `REQUIRE_USER_ID` is on and the call carried no authenticated `user_id` | `conversationId`, `agentLabel` |
 
 > Custom dimensions are accessed in KQL as `customDimensions.<name>`.
 > `canAnswer` is stored as the string `"true"` / `"false"`.
