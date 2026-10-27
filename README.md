@@ -20,7 +20,7 @@ This application is built to:
 
 To run this project, ensure that you have:
 1. Azure Functions Core Tools installed.
-2. Python 3.8 or later.
+2. Python 3.10 or later (required by the Azure Monitor OpenTelemetry exporter).
 3. Required libraries listed in `requirements.txt`.
 4. Azure Subscription to set up required resources like AI Projects.
 

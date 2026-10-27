@@ -22,50 +22,89 @@ from azure.ai.projects import AIProjectClient
 # (traces table) so telemetry never breaks the request.
 # ---------------------------------------------------------------------------
 _event_logger = None
-_event_handler = None
-_event_logger_ready = False
+_event_logger_provider = None
+_event_logger_last_attempt = 0.0
 _event_logger_lock = threading.Lock()
+_EVENT_LOGGER_RETRY_SECONDS = 60.0
+_flush_thread = None
+_flush_lock = threading.Lock()
+# LogRecord attributes that `extra` must not override: logging raises KeyError,
+# which would drop the event.
+_RESERVED_LOG_KEYS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {"message", "asctime"}
 
 
 def _get_event_logger():
     """Lazily build a logger that exports to the App Insights customEvents table."""
-    global _event_logger, _event_handler, _event_logger_ready
+    global _event_logger, _event_logger_provider, _event_logger_last_attempt
 
-    if _event_logger_ready:
+    if _event_logger is not None:
         return _event_logger
 
-    # Functions can run invocations concurrently in one worker; build once.
+    now = time.monotonic()
+    if _event_logger_last_attempt and now - _event_logger_last_attempt < _EVENT_LOGGER_RETRY_SECONDS:
+        return None
+
+    # Functions can run invocations concurrently in one worker; initialize once
+    # and retry later if the exporter has a transient startup failure.
     with _event_logger_lock:
-        if _event_logger_ready:
+        if _event_logger is not None:
             return _event_logger
+
+        now = time.monotonic()
+        if _event_logger_last_attempt and now - _event_logger_last_attempt < _EVENT_LOGGER_RETRY_SECONDS:
+            return None
+        _event_logger_last_attempt = now
 
         conn = os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING")
         if not conn:
             logging.warning("APPLICATIONINSIGHTS_CONNECTION_STRING not set; custom events go to traces only.")
-            _event_logger_ready = True
             return None
-        try:
-            from opencensus.ext.azure.log_exporter import AzureEventHandler
 
+        provider = None
+        try:
+            from azure.monitor.opentelemetry.exporter import AzureMonitorLogExporter
+            from opentelemetry.instrumentation.logging.handler import LoggingHandler
+            from opentelemetry.sdk._logs import LoggerProvider
+            from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+            from opentelemetry.sdk.resources import Resource
+
+            # service.name becomes cloud_RoleName; match the Function App's own telemetry.
+            resource = Resource.create({"service.name": os.environ.get("WEBSITE_SITE_NAME") or "function_app"})
+            provider = LoggerProvider(resource=resource)
+            exporter = AzureMonitorLogExporter.from_connection_string(conn)
+            provider.add_log_record_processor(
+                BatchLogRecordProcessor(exporter, schedule_delay_millis=2000)
+            )
+
+            handler = LoggingHandler(level=logging.INFO, logger_provider=provider)
             lg = logging.getLogger("agent_events")
             lg.setLevel(logging.INFO)
             lg.propagate = False
-            if not lg.handlers:
-                # Short export interval: Functions workers can be frozen shortly
-                # after an invocation, so do not let events sit in the buffer.
-                handler = AzureEventHandler(connection_string=conn, export_interval=2.0)
-                lg.addHandler(handler)
-                _event_handler = handler
-            else:
-                _event_handler = lg.handlers[0]
+            lg.addHandler(handler)
+
+            _event_logger_provider = provider
             _event_logger = lg
         except Exception as exporter_err:
             logging.warning(f"Custom event exporter unavailable ({exporter_err}); falling back to traces.")
             _event_logger = None
-        finally:
-            _event_logger_ready = True
+            _event_logger_provider = None
+            if provider is not None:
+                try:
+                    provider.shutdown()
+                except Exception as shutdown_err:
+                    logging.warning(
+                        f"Custom event exporter cleanup failed after initialization error: {shutdown_err}"
+                    )
 
     return _event_logger
+
+
+def _run_flush(provider, timeout_millis):
+    try:
+        if provider.force_flush(timeout_millis=timeout_millis) is False:
+            logging.warning("flush_events: the exporter did not flush all pending events")
+    except Exception as flush_err:
+        logging.warning(f"flush_events failed: {flush_err}")
 
 
 def flush_events():
@@ -75,25 +114,39 @@ def flush_events():
     completes, which would silently drop buffered telemetry. Call this before
     returning from a request. Never raises.
 
-    A timeout is always supplied: without one the exporter can block the request
-    thread if Application Insights is slow or unreachable. Tune with
-    TELEMETRY_FLUSH_TIMEOUT (seconds, default 2). Set TELEMETRY_FLUSH=false to
-    skip flushing entirely if you prefer lower latency over guaranteed delivery.
+    The OpenTelemetry batch processor ignores the flush timeout, so the flush
+    runs on a helper thread and the caller waits at most TELEMETRY_FLUSH_TIMEOUT
+    seconds (default 2); a slow or unreachable Application Insights cannot hold
+    the request. Set TELEMETRY_FLUSH=false to skip flushing entirely if you
+    prefer lower latency over guaranteed delivery.
     """
+    global _flush_thread
     if os.environ.get("TELEMETRY_FLUSH", "true").lower() in ("0", "false", "no"):
         return
     try:
-        if _event_handler is None:
+        provider = _event_logger_provider
+        if provider is None:
             return
         try:
             timeout = float(os.environ.get("TELEMETRY_FLUSH_TIMEOUT", "2"))
         except ValueError:
             timeout = 2.0
-        try:
-            _event_handler.flush(timeout=timeout)
-        except TypeError:
-            # Older exporters do not accept a timeout argument.
-            _event_handler.flush()
+        with _flush_lock:
+            worker = _flush_thread
+            # Join a flush that is still running rather than stacking threads
+            # while Application Insights is slow; it drains the whole queue.
+            if worker is None or not worker.is_alive():
+                worker = threading.Thread(
+                    target=_run_flush,
+                    args=(provider, max(1, int(timeout * 1000))),
+                    name="flush-events",
+                    daemon=True,
+                )
+                _flush_thread = worker
+                worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            logging.warning(f"flush_events still running after {timeout:g} seconds; not waiting longer")
     except Exception as flush_err:
         logging.warning(f"flush_events failed: {flush_err}")
 
@@ -122,7 +175,12 @@ def track_event(name, properties=None, measurements=None):
 
         lg = _get_event_logger()
         if lg is not None:
-            lg.info(name, extra={"custom_dimensions": dims})
+            event_attributes = {
+                (f"dim_{key}" if key in _RESERVED_LOG_KEYS else key): value
+                for key, value in dims.items()
+            }
+            event_attributes["microsoft.custom_event.name"] = name
+            lg.info(name, extra=event_attributes)
             # Flush immediately so the event survives worker freeze/recycle.
             flush_events()
         else:

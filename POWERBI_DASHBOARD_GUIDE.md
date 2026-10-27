@@ -290,8 +290,17 @@ sending:
 dims = _clean_dimensions(properties)
 if measurements:
     dims.update({k: v for k, v in measurements.items() if isinstance(v, (int, float))})
-lg.info(name, extra={"custom_dimensions": dims})
+event_attributes = {
+    (f"dim_{key}" if key in _RESERVED_LOG_KEYS else key): value
+    for key, value in dims.items()
+}
+event_attributes["microsoft.custom_event.name"] = name
+lg.info(name, extra=event_attributes)
 ```
+
+A dimension whose name collides with a Python `LogRecord` attribute (`name`, `message`, `module`,
+`args`, …) is stored as `dim_<name>` (for example `dim_name`); every dimension this app emits
+today keeps its own name.
 
 **Consequences for every query in this guide:**
 
@@ -1458,9 +1467,9 @@ Work through this in order — each step isolates a different layer:
 Reference only — `customEvents` ingestion is confirmed working in this environment. Use this
 if `customEvents` ever stops receiving new rows while the Function App is otherwise healthy.
 
-`track_event()` writes to `customEvents` only when the `opencensus` exporter initialises. If it
-fails, the code degrades to a plain trace line beginning with `EVENT` and `customEvents`
-receives nothing — with no error surfaced by the app.
+`track_event()` writes to `customEvents` only when the Azure Monitor OpenTelemetry exporter
+initialises. If it fails, the code degrades to a plain trace line beginning with `EVENT` and
+`customEvents` receives nothing — with no error surfaced by the app.
 
 ```kql
 traces
@@ -1474,7 +1483,7 @@ traces
 ```
 
 Any rows returned indicate the exporter is not writing to `customEvents`. Usual causes:
-`opencensus-ext-azure` missing from the deployed `requirements.txt`, or
+the pinned OpenTelemetry exporter dependencies missing from the deployed `requirements.txt`, or
 `APPLICATIONINSIGHTS_CONNECTION_STRING` unset on the Function App.
 
 ⚠️ **This is a diagnostic only — never a Power BI data source.** Fix the exporter and let the

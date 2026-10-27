@@ -29,8 +29,8 @@ interaction, every email send, and every blocked identity-override attempt. They
 ## Setup
 
 - ☐ `APPLICATIONINSIGHTS_CONNECTION_STRING` must be set on the Function App.
-- ☐ `opencensus-ext-azure` must be in `requirements.txt` (already added, pinned) so events
-  reach the `customEvents` table.
+- ☐ The pinned Azure Monitor OpenTelemetry exporter packages must be deployed from
+  `requirements.txt` so events reach the `customEvents` table.
 - ☐ If the exporter is unavailable, the code falls back to `traces` rows prefixed with
   `EVENT <name>` so no data is lost.
 - ☐ Allow 2–5 minutes for ingestion before querying.
@@ -38,8 +38,8 @@ interaction, every email send, and every blocked identity-override attempt. They
 ### Reliability on Consumption / Flex plans
 Azure Functions can freeze or recycle a worker immediately after a request completes, which
 would drop buffered telemetry. The code mitigates this by:
-- using a short exporter `export_interval` (2s), and
-- calling `flush_events()` immediately after each `track_event`.
+- using a short OpenTelemetry batch schedule delay (2s), and
+- forcing the OpenTelemetry logger provider to flush immediately after each `track_event`.
 
 If you still see missing events under bursty load, check the Function App is not scaling to
 zero mid-flush and confirm ingestion sampling is disabled in `host.json`.

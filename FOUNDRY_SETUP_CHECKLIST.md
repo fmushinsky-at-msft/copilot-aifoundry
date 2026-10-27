@@ -68,7 +68,7 @@ This becomes `AIProjectEndpoint`.
 > The deployment name is chosen by you at deploy time and is **not** necessarily the model
 > name. Copy what the portal shows, character for character.
 
-Code default if unset: `gpt-5.5` ([L1021](./function_app.py)). Set the variable explicitly
+Code default if unset: `gpt-5.5` ([L1079](./function_app.py)). Set the variable explicitly
 rather than relying on that default.
 
 ---
@@ -80,13 +80,13 @@ rather than relying on that default.
 - ☐ Paste in your system instructions.
 
 > ⚠️ **`AGENT_ID` holds the agent NAME, not a GUID.** The code calls
-> `project_client.agents.get(agent_name=agent_id)` ([L1040](./function_app.py)). Passing an
+> `project_client.agents.get(agent_name=agent_id)` ([L1098](./function_app.py)). Passing an
 > ID-looking value fails to resolve. The variable name is misleading; the value is a name.
 
 ### Include the NO_ANSWER instruction
 
 `agent_httptrigger` sets a `canAnswer` flag by scanning the reply for markers
-([L1158](./function_app.py)). The Copilot Studio topic branches on it to offer HR escalation.
+([L1216](./function_app.py)). The Copilot Studio topic branches on it to offer HR escalation.
 Without this, escalation never triggers.
 
 - ☐ Add to the agent instructions something like:
@@ -94,7 +94,7 @@ Without this, escalation never triggers.
   > If you cannot answer the question from your knowledge sources, reply with exactly
   > `NO_ANSWER` and nothing else.
 
-The default markers are in `DEFAULT_NO_ANSWER_MARKERS` ([L512](./function_app.py)) and include `NO_ANSWER` plus
+The default markers are in `DEFAULT_NO_ANSWER_MARKERS` ([L570](./function_app.py)) and include `NO_ANSWER` plus
 several natural-language phrases. Override with `NO_ANSWER_MARKERS` (`;`-separated) only if
 your agent's refusal wording differs.
 
@@ -110,7 +110,7 @@ Only if the agent should answer from your documents.
   **Search Index Data Contributor** and **Search Service Contributor** roles on the search
   resource, otherwise tool calls fail with 401/403.
 - ☐ Instruct the agent to cite sources, otherwise responses contain no annotations and
-  `render_message_with_citations` ([L1147](./function_app.py)) has nothing to render.
+  `render_message_with_citations` ([L1205](./function_app.py)) has nothing to render.
 
 ---
 
@@ -120,7 +120,7 @@ Only if the agent should answer from your documents.
 - ☐ **System assigned** tab → **Status: On** → **Save**.
 - ☐ Copy the **Object (principal) ID**. Step 6 needs it.
 
-This is what `DefaultAzureCredential()` ([L1036](./function_app.py)) uses in Azure. No keys or
+This is what `DefaultAzureCredential()` ([L1094](./function_app.py)) uses in Azure. No keys or
 secrets are involved.
 
 ---
@@ -177,11 +177,11 @@ Azure Portal → Function App → **Settings** → **Environment variables** →
 - ☐ `APPLICATIONINSIGHTS_CONNECTION_STRING` = your App Insights connection string.
 
 > `ModelDeploymentName` and `AGENT_ID` are listed as optional in the README. In practice both
-> are required: without `AGENT_ID` the agent lookup at [L1040](./function_app.py) fails, and
+> are required: without `AGENT_ID` the agent lookup at [L1098](./function_app.py) fails, and
 > the `ModelDeploymentName` default (`gpt-5.5`) is unlikely to match your deployment.
 
 App Insights is technically optional — the code degrades to plain traces
-([L42](./function_app.py)) — but without it you lose every `track_event` custom event and all
+([L58](./function_app.py)) — but without it you lose every `track_event` custom event and all
 the KQL dashboards in [ANALYTICS_KQL_QUERIES.md](./ANALYTICS_KQL_QUERIES.md).
 
 ### Platform settings
@@ -198,7 +198,7 @@ Set automatically when you create a Python Function App. Verify they exist:
 ### Recommended
 
 - ☐ `MAX_CONVERSATION_TURNS` = `8` — caps history before the context window overflows
-      ([L1051](./function_app.py)). Set `0` to disable. This exists because of a real
+      ([L1109](./function_app.py)). Set `0` to disable. This exists because of a real
       `context_length_exceeded` failure; do not remove it casually.
 - ☐ `REQUIRE_USER_ID` = `true` — reject any call that carries no authenticated identity.
       Turn it on once every caller sends `user_id` (the exported Copilot Studio flows do; see
@@ -250,20 +250,20 @@ Every variable the code reads, with the line that reads it.
 
 | Variable | Line | Required | Purpose |
 |---|---|---|---|
-| `AIProjectEndpoint` | 1020 | **Yes** | Foundry project endpoint. Missing → `500` |
-| `AGENT_ID` | 1022 | **Yes** | Agent **name** to serve requests |
-| `ModelDeploymentName` | 1021 | **Yes** in practice | Model deployment name. Defaults to `gpt-5.5` |
-| `APPLICATIONINSIGHTS_CONNECTION_STRING` | 42 | Recommended | Custom events; without it, traces only |
-| `MAX_CONVERSATION_TURNS` | 1051 | Recommended | Turn cap before rollover. Default `8` |
-| `ENABLE_SUMMARY_CARRYOVER` | 1081 | Optional | Carry a summary into a new conversation. Default on |
-| `REQUIRE_USER_ID` | 961 | Recommended | Fail closed: reject calls with no authenticated `user_id`. See [IDENTITY_SPOOFING_HARDENING.md](./IDENTITY_SPOOFING_HARDENING.md) |
-| `IDENTITY_GUARD_MODE` | 200 | Optional | Leave unset (`enforce`). `monitor` only logs identity-override attempts and does **not** protect requests; use it briefly during rollout, then remove it. Any other value enforces. See [IDENTITY_SPOOFING_HARDENING.md](./IDENTITY_SPOOFING_HARDENING.md) |
-| `AGENT_INSTRUCTIONS_TEMPLATE` | 989 | Optional | Template with `{placeholders}`, filled from `parameters`. The exported Flow A sends `user_id` and `user_full_name`, so a template may use both |
-| `NO_ANSWER_MARKERS` | 524 | Optional | `;`-separated refusal phrases driving `canAnswer` |
-| `CITATION_BASE_URL` | 586 | Optional | Base URL to turn file names into clickable citations |
-| `DEBUG_RAW_RESPONSE` | 877 | Optional | Log raw request bodies when JSON parsing fails |
-| `TELEMETRY_FLUSH` | 83 | Optional | Telemetry flush behaviour |
-| `TELEMETRY_FLUSH_TIMEOUT` | 89 | Optional | Telemetry flush timeout |
+| `AIProjectEndpoint` | 1078 | **Yes** | Foundry project endpoint. Missing → `500` |
+| `AGENT_ID` | 1080 | **Yes** | Agent **name** to serve requests |
+| `ModelDeploymentName` | 1079 | **Yes** in practice | Model deployment name. Defaults to `gpt-5.5` |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | 58 | Recommended | Custom events; without it, traces only |
+| `MAX_CONVERSATION_TURNS` | 1109 | Recommended | Turn cap before rollover. Default `8` |
+| `ENABLE_SUMMARY_CARRYOVER` | 1139 | Optional | Carry a summary into a new conversation. Default on |
+| `REQUIRE_USER_ID` | 1019 | Recommended | Fail closed: reject calls with no authenticated `user_id`. See [IDENTITY_SPOOFING_HARDENING.md](./IDENTITY_SPOOFING_HARDENING.md) |
+| `IDENTITY_GUARD_MODE` | 258 | Optional | Leave unset (`enforce`). `monitor` only logs identity-override attempts and does **not** protect requests; use it briefly during rollout, then remove it. Any other value enforces. See [IDENTITY_SPOOFING_HARDENING.md](./IDENTITY_SPOOFING_HARDENING.md) |
+| `AGENT_INSTRUCTIONS_TEMPLATE` | 1047 | Optional | Template with `{placeholders}`, filled from `parameters`. The exported Flow A sends `user_id` and `user_full_name`, so a template may use both |
+| `NO_ANSWER_MARKERS` | 582 | Optional | `;`-separated refusal phrases driving `canAnswer` |
+| `CITATION_BASE_URL` | 644 | Optional | Base URL to turn file names into clickable citations |
+| `DEBUG_RAW_RESPONSE` | 935 | Optional | Log raw request bodies when JSON parsing fails |
+| `TELEMETRY_FLUSH` | 124 | Optional | Telemetry flush behaviour. `false` skips the per-event flush |
+| `TELEMETRY_FLUSH_TIMEOUT` | 131 | Optional | Max seconds a request waits for the telemetry flush. Default `2` |
 
 Used by the **other** routes in the same app, not by `agent_httptrigger`:
 

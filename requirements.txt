@@ -22,4 +22,10 @@ azure-ai-projects==2.0.1
 azure-identity==1.25.3
 openai==2.54.0
 aiohttp==3.14.3
-opencensus-ext-azure==1.1.13
+
+# Custom events use the supported Azure Monitor OpenTelemetry exporter rather
+# than the retired OpenCensus SDK. Keep these versions aligned: OpenTelemetry
+# SDK 1.45.x corresponds to instrumentation package 0.66b0.
+azure-monitor-opentelemetry-exporter==1.0.0b58
+opentelemetry-sdk==1.45.0
+opentelemetry-instrumentation-logging==0.66b0
